@@ -1,0 +1,21 @@
+# Build artifacts
+*.o
+*.obj
+*.exe
+*.so
+*.dll
+*.dylib
+hevcparser_native
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CodeGraph
+.codegraph/

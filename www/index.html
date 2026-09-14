@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BrowserCodecAnalyzer - H.264/H.265/H.266 Bitstream Analyzer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23222'/%3E%3Ctext x='8' y='12' font-size='7' text-anchor='middle' fill='%2346a0ff' font-family='monospace' font-weight='bold'%3EC%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Stream<span class="accent">Scope</span></h1>
+    <div class="header-actions">
+      <span id="codecBadge" class="codec-badge hidden"></span>
+      <button id="resetBtn" class="btn btn-secondary hidden">Reset</button>
+      <input type="file" id="fileInput" hidden accept="video/*,image/*,.h264,.h265,.hevc,.h266,.vvc,.266,.265,.264,.avc,.bin,.bit,.mp4,.m4v,.mov,.webm,.ts,.m2ts,.mts,.heic,.heif,.avif,.av1,.ivf,.obu,.png,.jpg,.jpeg,.gif,.webp,.bmp">
+      <span id="fileName" class="file-name">No file loaded</span>
+      <button id="helpBtn" class="btn btn-secondary" title="Help & About">? Help</button>
+      <button id="pluginBtn" class="btn btn-secondary" title="Load a SEI plugin (.js)">⚙ Plugin</button>
+      <input type="file" id="pluginInput" hidden accept=".js">
+      <span class="version-badge">v1.0.0</span>
+      <button id="openBtn" class="btn">Open File</button>
+    </div>
+  </header>
+
+  <div id="dropzone" class="dropzone">
+    <div class="dropzone-inner">
+      <p>Drop a <strong>.h264 / .h265 / .h266 / .mp4 / .mov / .webm / .ivf</strong> bitstream here</p>
+      <p class="hint">Supports H.264 (AVC) / H.265 (HEVC) / H.266 (VVC) / AV1 / VP9 video, MP4/MOV/WebM/IVF containers, and HEIC/AVIF/JPEG/PNG images (auto detect).</p>
+    </div>
+  </div>
+
+  <section id="statsBar" class="stats-bar hidden"></section>
+
+  <section id="timelinePanel" class="timeline-panel hidden">
+    <div class="panel-title">Frame Structure (Slice Timeline) <span id="timelineLegend" class="legend"></span></div>
+    <div class="timeline-wrap"><canvas id="timeline" class="timeline"></canvas></div>
+  </section>
+
+  <main id="mainArea" class="main-area hidden">
+    <section class="panel nal-panel">
+      <div class="panel-title">NAL Unit List <span id="nalCount" class="count"></span></div>
+      <div id="nalScroll" class="nal-scroll">
+        <div id="nalSpacer"></div>
+        <div id="nalRows"></div>
+      </div>
+      <div id="nalHeaderRow" class="nal-header">
+        <span class="c-offset">Offset</span>
+        <span class="c-length">Length</span>
+        <span class="c-type">Type</span>
+        <span class="c-frame">Frame</span>
+        <span class="c-info">Info</span>
+      </div>
+    </section>
+
+    <div id="splitMainCol" class="splitter splitter-col"></div>
+
+    <section class="panel syntax-panel">
+      <div class="panel-title">
+        Syntax Elements <span id="syntaxTitle" class="count"></span>
+        <div class="tab-group">
+          <button id="tabSyntax" class="tab active">Syntax</button>
+          <button id="tabPreview" class="tab">Preview</button>
+          <button id="tabHex" class="tab">Hex</button>
+          <button id="tabMediaInfo" class="tab">MediaInfo</button>
+          <button id="tabBitrate" class="tab">Bitrate</button>
+        </div>
+      </div>
+      <div id="syntaxTree" class="syntax-tree"></div>
+      <div id="mediaInfoView" class="syntax-tree hidden"></div>
+      <div id="previewView" class="preview-view hidden">
+        <div class="preview-wrap">
+          <canvas id="previewCanvas" class="preview-canvas"></canvas>
+          <div class="preview-side">
+            <div class="preview-controls">
+              <button id="previewPlayBtn" class="btn btn-small">▶ Play</button>
+              <button id="previewPrevBtn" class="btn btn-small btn-secondary" title="Prev frame">|◀ Prev</button>
+              <button id="previewNextBtn" class="btn btn-small btn-secondary" title="Next frame">Next ▶|</button>
+              <button id="previewOrderBtn" class="btn btn-small btn-secondary" title="Toggle play order">Decode Order</button>
+            </div>
+            <div id="previewHint" class="legend"></div>
+            <div id="previewMsg" class="preview-msg">Click a frame on the timeline to preview</div>
+          </div>
+        </div>
+      </div>
+      <div id="hexView" class="hex-view hidden"></div>
+      <div id="bitrateView" class="bitrate-view hidden"></div>
+    </section>
+  </main>
+
+  <div id="splitMainRow" class="splitter splitter-row"></div>
+
+  <nav id="mobileNav" class="mobile-nav">
+    <button data-view="nal" class="active">NAL</button>
+    <button data-view="syntax">Syntax</button>
+    <button data-view="hdr">HDR/Warn</button>
+  </nav>
+
+  <section id="bottomPanels" class="bottom-panels hidden">
+    <section class="panel hdr-panel">
+      <div class="panel-title">HDR / Color Info</div>
+      <div id="hdrInfo" class="kv-list"></div>
+    </section>
+
+    <div id="splitBottomCol" class="splitter splitter-col"></div>
+
+    <section class="panel warning-panel">
+      <div class="panel-title">
+        Warnings <span id="warningCount" class="count"></span>
+        <select id="warningFilter" class="filter">
+          <option value="-1">All</option>
+          <option value="1">Out of range</option>
+          <option value="2">Missing ref structure</option>
+          <option value="3">Profile conformance</option>
+        </select>
+      </div>
+      <div class="table-wrap">
+        <table id="warningTable">
+          <thead><tr><th>Offset</th><th>Message</th></tr></thead>
+          <tbody id="warningBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </section>
+
+  <footer class="statusbar">
+    <span id="status">Loading parser module...</span>
+  </footer>
+
+  <div id="helpModal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <span>BrowserCodecAnalyzer Help & About</span>
+        <button id="helpClose" class="btn btn-secondary btn-small">✕</button>
+      </div>
+      <div class="modal-body">
+        <h4>About</h4>
+        <ul>
+          <li><b>Name:</b> BrowserCodecAnalyzer — H.264 / H.265 / H.266 / AV1 Bitstream &amp; Image Analyzer</li>
+          <li><b>Version:</b> v1.0.0</li>
+        </ul>
+        <h4>Usage</h4>
+        <ul>
+          <li>Open or drag-and-drop a <b>.h264 / .h265 / .h266 / .mp4 / .mov / .webm / .ivf / .av1 / .obu</b> file, or an image <b>.heic / .avif / .jpg / .png / .gif / .webp</b>.</li>
+          <li><b>NAL / OBU Unit List</b> — click a unit to inspect its syntax tree, Hex bytes, and locate the frame on the timeline.</li>
+          <li><b>Frame Structure</b> — timeline of slices colored by type (I=red, P=blue, B=green). Click a frame to preview; use <b>Zoom +/-</b> to resize, <b>⏮/⏭</b> to step frame by frame.</li>
+          <li><b>Syntax / Preview / Hex</b> tabs — switch between parsed element tree, decoded video preview, and raw bytes.</li>
+          <li><b>Play</b> — play decoded frames (rate follows the bitstream FPS when available), with progress highlight on the timeline.</li>
+          <li><b>MediaInfo</b> tab — container-level metadata (format, duration, bitrate, tracks).</li>
+          <li><b>Splitters</b> — drag the divider bars to resize columns / rows.</li>
+        </ul>
+        <h4>Supported</h4>
+        <ul>
+          <li>Video codecs: H.264 (AVC), H.265 (HEVC), H.266 (VVC), AV1, VP9</li>
+          <li>Containers: MP4 / M4V / MOV / WebM / IVF (auto-demux)</li>
+          <li>Images: HEIC / HEIF, AVIF, JPEG (EXIF), PNG, GIF, WebP, BMP</li>
+          <li>Video decode: WebCodecs (H.264/H.265/VP9) + vvdec WASM (H.266) + dav1d WASM (AV1)</li>
+          <li>Image decode: libheif WASM (HEIC) + dav1d WASM (AVIF) + browser-native (JPEG/PNG/…)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <script src="hevc.js"></script>
+  <script src="js/demux.js"></script>
+  <script src="js/jpeg.js"></script>
+  <script src="js/plugin.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
