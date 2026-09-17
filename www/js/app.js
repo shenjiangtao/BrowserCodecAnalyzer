@@ -422,37 +422,40 @@
     return { slices: slices, frames: frames };
   }
 
-  // ---------- YUV raw 支持 ----------
-  // 构建 YUV 数据模型：每帧一个"slice"（等大的原始帧数据块）
+  // ---------- YUV raw 支持（单帧模式，8K 上限） ----------
+  // 构建 YUV 数据模型：单帧 = 文件首个 frameSize 字节
   function buildYuvData(bytes, width, height, format, fps, matrix, mtime) {
     var fmt = YuvParser.FORMATS[format];
     var frameSize = fmt.bytesPerFrame(width, height);
     if (!frameSize || frameSize <= 0) throw new Error("Invalid frame size for " + width + "x" + height + " " + format);
-    var frames = Math.floor(bytes.length / frameSize);
-    if (frames <= 0) throw new Error("File too small: " + bytes.length + " bytes < frame size " + frameSize);
+    if (bytes.length < frameSize) throw new Error("File too small: " + bytes.length + " bytes < one frame (" + frameSize + " B)");
 
     var warnings = [];
-    if (bytes.length % frameSize !== 0)
-      warnings.push({ position: frames * frameSize, type: 1, message: "File size " + bytes.length + " not divisible by frame size " + frameSize + " (" + fmt.name + " " + width + "x" + height + ") — last frame incomplete" });
-    if (frames > 100000)
-      warnings.push({ position: 0, type: 1, message: "Very large frame count (" + frames + ") — timeline may be slow" });
+    if (bytes.length > frameSize)
+      warnings.push({ position: frameSize, type: 1, message: "File size " + bytes.length + " B exceeds one frame (" + frameSize + " B) — extra " + (bytes.length - frameSize) + " B ignored (single-frame mode)" });
 
-    var nalus = [];
-    for (var i = 0; i < frames; i++) {
-      nalus.push({ offset: i * frameSize, length: frameSize, type: 0, typeName: "YUV Frame", info: "#" + i + " · " + (i / fps).toFixed(3) + "s", color: "#7ec8ff", sliceType: 2, firstSlice: 1, frameIdx: i });
-    }
+    var nalus = [{ offset: 0, length: frameSize, type: 0, typeName: "YUV Frame", info: "#0 · 0.000s", color: "#7ec8ff", sliceType: 2, firstSlice: 1, frameIdx: 0 }];
     return {
       codec: "yuv",
       isYuv: true,
-      yuv: { width: width, height: height, format: format, formatName: fmt.name, arrangement: fmt.arrangement, fps: fps, frameSize: frameSize, frames: frames, colorMatrix: matrix, fullRange: false, mtime: mtime },
+      yuv: { width: width, height: height, format: format, formatName: fmt.name, arrangement: fmt.arrangement, fps: fps, frameSize: frameSize, frames: 1, colorMatrix: matrix, fullRange: false, mtime: mtime },
       nalus: nalus,
-      streamInfo: { nalus: frames, slices: frames, i: frames, p: 0, b: 0, profile: "Raw YUV", level: "-", picWidth: width, picHeight: height, fps: String(fps) },
+      streamInfo: { nalus: 1, slices: 1, i: 1, p: 0, b: 0, profile: "Raw YUV", level: "-", picWidth: width, picHeight: height, fps: String(fps) },
       hdr: { picWidth: width, picHeight: height },
       warnings: warnings
     };
   }
 
-  // YUV 单帧 → previewCanvas
+  // YUV 单帧 → previewCanvas（putImageData 全分辨率 + GPU drawImage 缩放）
+  var currentFullFrame = null;  // 全分辨率帧快照（offscreen canvas，供放大查看/导出 PNG）
+  function ensureFullFrame(w, h) {
+    if (!currentFullFrame) currentFullFrame = document.createElement("canvas");
+    if (currentFullFrame.width !== w || currentFullFrame.height !== h) {
+      currentFullFrame.width = w;
+      currentFullFrame.height = h;
+    }
+    return currentFullFrame;
+  }
   function drawYuvFrame(frameIndex) {
     if (!currentData || !currentData.isYuv || !fileBytes) return;
     var yu = currentData.yuv;
@@ -461,6 +464,10 @@
     var planes = YuvParser.getFrame(fileBytes, frameIndex * frameSize, yu.width, yu.height, yu.format);
     if (!planes) { previewMsg.textContent = "Frame data out of range"; return; }
     var rgba = YuvParser.yuvToRGBA(yu.width, yu.height, yu.format, planes, yu.colorMatrix, yu.fullRange);
+    var full = ensureFullFrame(yu.width, yu.height);
+    var fctx = full.getContext("2d");
+    fctx.putImageData(new ImageData(rgba, yu.width, yu.height), 0, 0);
+    previewCanvasTouched = true;
     var c = previewCanvas;
     var w = yu.width, h = yu.height;
     var maxW = previewView.clientWidth - 32;
@@ -469,50 +476,14 @@
     var scale = Math.min(1, maxW / w, maxH / h);
     c.width = Math.max(1, Math.round(w * scale));
     c.height = Math.max(1, Math.round(h * scale));
-    previewCanvasTouched = true;
     var ctx = c.getContext("2d");
-    var imgData = ctx.createImageData(c.width, c.height);
-    // 逐像素最近邻缩放（rgba → 缩放后画布）
-    var sw = c.width, sh = c.height;
-    var d = imgData.data;
-    for (var row = 0; row < sh; row++) {
-      var sy = Math.min(h - 1, Math.floor(row / scale));
-      for (var col = 0; col < sw; col++) {
-        var sx = Math.min(w - 1, Math.floor(col / scale));
-        var so = (sy * w + sx) * 4, to = (row * sw + col) * 4;
-        d[to] = rgba[so]; d[to + 1] = rgba[so + 1]; d[to + 2] = rgba[so + 2]; d[to + 3] = 255;
-      }
-    }
-    ctx.putImageData(imgData, 0, 0);
+    ctx.drawImage(full, 0, 0, c.width, c.height);
     var ts = (frameIndex / yu.fps).toFixed(3);
     previewHint.textContent = "Frame " + frameIndex + " / POC " + frameIndex + " · " + ts + "s" + (yu.mtime ? " · captured " + yu.mtime : "");
     previewMsg.textContent = "";
   }
 
-var yuvPlay = { active: false, timer: null, frameIdx: 0 };
-
-  function startYuvPlayback() {
-    if (yuvPlay.active) { stopPlayback(); return; }
-    if (!currentData || !currentData.isYuv) return;
-    var yu = currentData.yuv;
-    if (!yu || yu.frames <= 0) return;
-    yuvPlay.active = true;
-    yuvPlay.frameIdx = 0;
-    previewPlayBtn.textContent = "⏸ Pause";
-    previewMsg.textContent = "";
-    resetPlayProgress(0);
-    var iv = Math.max(1, Math.round(1000 / yu.fps));
-    yuvPlay.timer = setInterval(function () {
-      if (!yuvPlay.active) return;
-      if (yuvPlay.frameIdx >= yu.frames) { stopPlayback(); return; }
-      var fi = yuvPlay.frameIdx++;
-      var f = timeline._frames ? timeline._frames[fi] : null;
-      if (f) { updatePlayProgress(f.first); highlightFrame(f.first); }
-      drawYuvFrame(fi);
-    }, iv);
-  }
-
-  // YUV 设置面板：显示并填充当前值
+// YUV 设置面板：显示并填充当前值
   function showYuvSettings() {
     var panel = document.getElementById("yuvSettingsPanel");
     if (!panel || !currentData || !currentData.isYuv) return;
@@ -526,11 +497,11 @@ var yuvPlay = { active: false, timer: null, frameIdx: 0 };
     var guessEl = document.getElementById("yuvGuess");
     var frameSize = (yu.width && yu.height) ? YuvParser.FORMATS[yu.format].bytesPerFrame(yu.width, yu.height) : 0;
     if (yu.width && yu.height) {
-      var frames = Math.floor(fileBytes.length / frameSize);
-      var partial = (fileBytes.length % frameSize !== 0) ? " (incomplete last frame)" : "";
-      guessEl.textContent = "Frame size " + frameSize + " B · " + frames + " frames" + partial + (yu.guessed ? " · auto-guessed" : "");
+      var extra = (fileBytes.length > frameSize) ? " · extra " + (fileBytes.length - frameSize) + " B ignored (single-frame)" : "";
+      guessEl.textContent = "Frame size " + frameSize + " B · file " + fileBytes.length + " B" + extra +
+        (yu.guessed ? " · auto-guessed (exact single-frame match)" : " (max " + YuvParser.MAX_WIDTH + "x" + YuvParser.MAX_HEIGHT + ")");
     } else {
-      guessEl.textContent = "Size " + fileBytes.length + " B does not match any common resolution — enter width/height";
+      guessEl.textContent = "Size " + fileBytes.length + " B does not match any common resolution — enter width/height (max " + YuvParser.MAX_WIDTH + "x" + YuvParser.MAX_HEIGHT + ")";
     }
   }
 
@@ -543,10 +514,10 @@ var yuvPlay = { active: false, timer: null, frameIdx: 0 };
     var fps = parseFloat(document.getElementById("yuvFps").value);
     var matrix = document.getElementById("yuvMatrix").value;
     if (!w || w <= 0 || !h || h <= 0) { previewMsg.textContent = "Invalid resolution"; return; }
+    if (w > YuvParser.MAX_WIDTH || h > YuvParser.MAX_HEIGHT) { previewMsg.textContent = "Resolution exceeds 8K limit (" + YuvParser.MAX_WIDTH + "x" + YuvParser.MAX_HEIGHT + ")"; return; }
     if (!fps || fps <= 0) fps = 30;
     if (!YuvParser.FORMATS[fmt]) { previewMsg.textContent = "Unknown format"; return; }
     var mtime = currentData.yuv ? currentData.yuv.mtime : null;
-    var keepFrame = (currentData.yuv && currentData.yuv.frames > 0) ? frameIndexOfSlice(selectedSlice) : -1;
     try {
       var data = buildYuvData(fileBytes, w, h, fmt, fps, matrix, mtime);
       currentData = data;
@@ -559,14 +530,11 @@ var yuvPlay = { active: false, timer: null, frameIdx: 0 };
       renderWarnings();
       renderTimeline();
       showYuvSettings();
-      // 恢复到之前的帧位置
-      var fi = keepFrame >= 0 ? Math.min(keepFrame, data.yuv.frames - 1) : 0;
-      selectedSlice = timeline._frames[fi].first;
-      selectNal(timeline._slices[selectedSlice].index, true);
-      renderTimeline();
-      if (!previewView.classList.contains("hidden")) previewFrame(timeline._frames[fi].first);
+      selectedSlice = 0;
+      selectNal(0, true);
+      if (!previewView.classList.contains("hidden")) previewFrame(0);
       if (!bitrateView.classList.contains("hidden")) renderBitrate();
-      setStatus("YUV re-parsed: " + w + "x" + h + " " + YuvParser.FORMATS[fmt].name + " @ " + fps + "fps, " + data.yuv.frames + " frames");
+      setStatus("YUV parsed: " + w + "x" + h + " " + YuvParser.FORMATS[fmt].name + " @ " + fps + "fps, single frame");
     } catch (err) {
       previewMsg.textContent = "YUV parse error: " + err.message;
     }
@@ -597,6 +565,54 @@ var yuvPlay = { active: false, timer: null, frameIdx: 0 };
   var yuvFormatSel = document.getElementById("yuvFormat");
   if (yuvMatrixSel) yuvMatrixSel.addEventListener("change", onYuvQuickChange);
   if (yuvFormatSel) yuvFormatSel.addEventListener("change", onYuvQuickChange);
+
+  // ---------- 帧放大查看 / 导出 PNG（点击预览画面打开） ----------
+  var frameModal = document.getElementById("frameModal");
+  var frameModalBody = document.getElementById("frameModalBody");
+  var frameModalTitle = document.getElementById("frameModalTitle");
+  var frameModalFit = document.getElementById("frameModalFit");
+  var frameModal100 = document.getElementById("frameModal100");
+  var frameModalSave = document.getElementById("frameModalSave");
+  var frameModalClose = document.getElementById("frameModalClose");
+
+  function openFrameModal() {
+    if (!currentFullFrame || !currentFullFrame.width) return;
+    frameModalTitle.textContent = "Frame Preview — " + currentFullFrame.width + " x " + currentFullFrame.height +
+      (currentData && currentData.isYuv && currentData.yuv ? " · " + currentData.yuv.formatName : "");
+    frameModalBody.innerHTML = "";
+    var snapshot = document.createElement("canvas");
+    snapshot.width = currentFullFrame.width;
+    snapshot.height = currentFullFrame.height;
+    snapshot.getContext("2d").drawImage(currentFullFrame, 0, 0);
+    frameModalBody.appendChild(snapshot);
+    setFrameModalMode("fit");
+    frameModal.classList.remove("hidden");
+  }
+  function setFrameModalMode(mode) {
+    frameModalBody.classList.toggle("fit", mode === "fit");
+    frameModalFit.classList.toggle("active", mode === "fit");
+    frameModal100.classList.toggle("active", mode === "100");
+  }
+  function saveFramePng() {
+    var canvas = frameModalBody.querySelector("canvas");
+    if (!canvas) return;
+    canvas.toBlob(function (blob) {
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = "frame" + (selectedSlice >= 0 ? "_" + selectedSlice : "") + ".png";
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    }, "image/png");
+  }
+  if (frameModal) {
+    previewCanvas.addEventListener("click", openFrameModal);
+    frameModalFit.addEventListener("click", function () { setFrameModalMode("fit"); });
+    frameModal100.addEventListener("click", function () { setFrameModalMode("100"); });
+    frameModalSave.addEventListener("click", saveFramePng);
+    frameModalClose.addEventListener("click", function () { frameModal.classList.add("hidden"); });
+    frameModal.addEventListener("click", function (e) { if (e.target === frameModal) frameModal.classList.add("hidden"); });
+  }
 
   // YUV 帧语法节点（不调用 WASM）
   function buildYuvSyntaxNode(frameIndex) {
@@ -945,7 +961,6 @@ var yuvPlay = { active: false, timer: null, frameIdx: 0 };
     var dpr = window.devicePixelRatio || 1;
     var labelH = TL_LABEL_H;
     var barH = TL_BAR_H;
-    var wrapW = timeline.parentNode.clientWidth - 24;
     var fitBarW = wrapW / slices.length;
     var barW = Math.max(TL_MIN_BAR_W, fitBarW * timelineZoom);
     var frameGap = Math.round(barW * TL_FRAME_GAP_RATIO);
@@ -954,23 +969,23 @@ var yuvPlay = { active: false, timer: null, frameIdx: 0 };
     // 计算每个 slice 的 x 坐标（帧之间插入物理空隙）
     var xs = new Array(slices.length);
     var cursor = 0;
+    var singleSliceUnderMin = 0;
     for (var fi = 0; fi < frames.length; fi++) {
       if (fi > 0) cursor += frameGap;
       var f = frames[fi];
-      var sliceCount = f.last - f.first + 1;
       for (var si = f.first; si <= f.last; si++) {
         xs[si] = cursor;
         cursor += barW + innerGap;
       }
-      // 单slice帧：确保最小可点击宽度
-      if (sliceCount === 1) {
-        var frameStartX = xs[f.first];
-        var frameEndX = frameStartX + barW;
-        var frameWidth = frameEndX - frameStartX;
-        if (frameWidth < TL_MIN_CLICKABLE_FRAME_W) {
-          cursor += TL_MIN_CLICKABLE_FRAME_W - frameWidth;
-        }
-      }
+      if (f.last === f.first && barW < TL_MIN_CLICKABLE_FRAME_W) singleSliceUnderMin++;
+    }
+
+    // 单slice帧最小可点击宽度：仅在总宽度不超 canvas 预算时应用
+    // （超限时帧在布局中保持窄小，可点击性由命中区/高亮的最小宽度保证）
+    var expansion = singleSliceUnderMin * (TL_MIN_CLICKABLE_FRAME_W - barW);
+    var MAX_CANVAS_W = 32768;
+    if (expansion > 0 && (cursor + expansion) * dpr <= MAX_CANVAS_W) {
+      cursor += expansion;
     }
 
     var w = cursor;
@@ -1514,8 +1529,6 @@ timeline.addEventListener("click", function (e) {
   function stopPlayback() {
     if (play.timer) { clearInterval(play.timer); play.timer = null; }
     play.active = false;
-    if (yuvPlay.timer) { clearInterval(yuvPlay.timer); yuvPlay.timer = null; }
-    yuvPlay.active = false;
     if (vvdecPlay.timer) { clearInterval(vvdecPlay.timer); vvdecPlay.timer = null; }
     vvdecPlay.active = false;
     if (vvdecPlay.decoder) { try { vvdecPlay.decoder.delete(); } catch (e) {} vvdecPlay.decoder = null; }
@@ -1526,9 +1539,9 @@ timeline.addEventListener("click", function (e) {
   }
 
   function startPlayback() {
-    if (play.active || vvdecPlay.active || av1Play.active || yuvPlay.active) { stopPlayback(); return; }
+    if (play.active || vvdecPlay.active || av1Play.active) { stopPlayback(); return; }
     if (currentData && currentData.isImage) { return; }
-    if (currentData && currentData.isYuv) { startYuvPlayback(); return; }
+    if (currentData && currentData.isYuv) { return; }  // 单帧模式，无连续帧播放
     if (currentCodec === "vvc") { startVvcPlayback(); return; }
     if (currentCodec === "av1") { startAv1Playback(); return; }
     var frames = timeline._frames;
@@ -1687,6 +1700,10 @@ timeline.addEventListener("click", function (e) {
     var w = frame.displayWidth || frame.codedWidth || frame.width || 0;
     var h = frame.displayHeight || frame.codedHeight || frame.height || 0;
     if (w <= 0 || h <= 0) return;
+    // 全分辨率快照（供放大查看/导出 PNG）
+    var full = ensureFullFrame(w, h);
+    var fctx = full.getContext("2d");
+    fctx.drawImage(frame, 0, 0, w, h);
     var maxW = previewView.clientWidth - 32;
     var maxH = 480;
     if (maxW < 160) maxW = 160;
@@ -1695,7 +1712,7 @@ timeline.addEventListener("click", function (e) {
     c.height = Math.max(1, Math.round(h * scale));
     previewCanvasTouched = true;
     var ctx = c.getContext("2d");
-    ctx.drawImage(frame, 0, 0, c.width, c.height);
+    ctx.drawImage(full, 0, 0, c.width, c.height);
   }
 
   function presetPreviewCanvas() {
@@ -2133,7 +2150,7 @@ timeline.addEventListener("click", function (e) {
   function previewFrame(sliceIndex) {
     if (!fileBytes || !currentData) return;
     if (currentData.isYuv) {
-      if (play.active || vvdecPlay.active || yuvPlay.active) stopPlayback();
+      if (play.active || vvdecPlay.active) stopPlayback();
       var yu0 = currentData.yuv;
       if (!yu0 || yu0.frames <= 0) { previewMsg.textContent = "Set resolution/format in YUV Settings"; return; }
       var fi0 = frameIndexOfSlice(sliceIndex);
@@ -2405,8 +2422,9 @@ timeline.addEventListener("click", function (e) {
   });
 
   function stepFrame(delta) {
-    if (play.active || vvdecPlay.active || yuvPlay.active) stopPlayback();
+    if (play.active || vvdecPlay.active) stopPlayback();
     if (currentData && currentData.isImage) return;
+    if (currentData && currentData.isYuv) return;
     var frames = timeline._frames;
     if (!frames || frames.length === 0) return;
     var fi = 0;
@@ -2437,9 +2455,6 @@ timeline.addEventListener("click", function (e) {
     play.displayOrder = false;
     var previewOrderBtn = document.getElementById("previewOrderBtn");
     if (previewOrderBtn) { previewOrderBtn.textContent = "Decode Order"; }
-    if (yuvPlay.timer) { clearInterval(yuvPlay.timer); yuvPlay.timer = null; }
-    yuvPlay.active = false;
-    yuvPlay.frameIdx = 0;
     var yuvSettingsPanel = document.getElementById("yuvSettingsPanel");
     if (yuvSettingsPanel) yuvSettingsPanel.classList.add("hidden");
     if (vvdecPlay.decoder) { try { vvdecPlay.decoder.delete(); } catch (e) {} vvdecPlay.decoder = null; }
@@ -2482,6 +2497,7 @@ timeline.addEventListener("click", function (e) {
     previewCanvas.width = 0;
     previewCanvas.height = 0;
     previewCanvasTouched = false;
+    currentFullFrame = null;
     previewHint.textContent = "";
     previewMsg.textContent = "Click a frame on the timeline to preview";
 

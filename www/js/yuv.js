@@ -21,44 +21,43 @@ var YuvParser = (function () {
 
   var FORMAT_ORDER = ["i420", "nv12", "yv12", "nv21", "yuv422p", "yuyv", "uyvy", "yuv444p"];
 
-  // 常见分辨率（按可能性排序）
+  // 常见分辨率（按可能性排序，8K 为最大上限）
+  var MAX_WIDTH = 7680;
+  var MAX_HEIGHT = 4320;
   var COMMON_RESOLUTIONS = [
     [1920, 1080], [1280, 720], [3840, 2160], [3848, 2168], [2560, 1440], [640, 480],
     [704, 576], [720, 576], [704, 480], [720, 480], [960, 540],
     [640, 360], [320, 240], [352, 288], [352, 240], [1600, 1200],
     [2048, 1536], [1920, 1536], [2592, 1944], [1280, 960], [1280, 1024], [1920, 1200],
-    [800, 600], [1024, 768], [176, 144], [128, 96], [480, 320], [480, 272]
+    [800, 600], [1024, 768], [176, 144], [128, 96], [480, 320], [480, 272],
+    [7680, 4320]
   ];
 
   // ---------- 自动猜测 ----------
-  // fileSize 整除性检查：返回最佳候选 { width, height, format, frames, alternatives }
+  // 仅单帧：fileSize 恰好等于某分辨率×格式的单帧大小时返回该候选
   function guessFormat(fileSize) {
     if (!fileSize || fileSize <= 0) return null;
     var candidates = [];
     for (var r = 0; r < COMMON_RESOLUTIONS.length; r++) {
       var w = COMMON_RESOLUTIONS[r][0], h = COMMON_RESOLUTIONS[r][1];
+      if (w > MAX_WIDTH || h > MAX_HEIGHT) continue;
       for (var fi = 0; fi < FORMAT_ORDER.length; fi++) {
         var key = FORMAT_ORDER[fi];
-        var fmt = FORMATS[key];
-        var frameSize = fmt.bytesPerFrame(w, h);
-        if (frameSize <= 0 || fileSize % frameSize !== 0) continue;
-        var frames = fileSize / frameSize;
-        if (frames < 1 || frames > 1000000) continue;
-        candidates.push({ width: w, height: h, format: key, frames: frames, order: candidates.length });
+        var frameSize = FORMATS[key].bytesPerFrame(w, h);
+        if (frameSize <= 0 || fileSize !== frameSize) continue;
+        candidates.push({ width: w, height: h, format: key, frames: 1, order: candidates.length });
       }
     }
     if (candidates.length === 0) return null;
 
-    // 排序：单帧匹配优先（巧合最少），其次常用格式（i420/nv12 → packed yuyv/uyvy），
-    // 帧数适中优先；order 作最终 tiebreaker（不依赖引擎 sort 稳定性）
+    // 排序：常用格式优先（i420/nv12 → packed yuyv/uyvy）；
+    // order 作最终 tiebreaker（不依赖引擎 sort 稳定性）
     function score(c) {
       var fmtRank = (c.format === "i420" || c.format === "nv12") ? 0 :
                     (c.format === "yuyv" || c.format === "uyvy") ? 1 :
                     (c.format === "yv12" || c.format === "nv21") ? 2 : 3;
-      var frames = c.frames;
-      var framesRank = (frames === 1) ? 0 : (frames <= 500 ? 1 : 2);
       var resRank = COMMON_RESOLUTIONS.findIndex(function (res) { return res[0] === c.width && res[1] === c.height; });
-      return [framesRank, fmtRank, resRank < 0 ? 999 : resRank, frames, c.order];
+      return [fmtRank, resRank < 0 ? 999 : resRank, c.order];
     }
     candidates.sort(function (a, b) {
       var sa = score(a), sb = score(b);
@@ -70,14 +69,6 @@ var YuvParser = (function () {
     var best = candidates[0];
     best.alternatives = candidates.slice(1, 8);
     return best;
-  }
-
-  function frameCount(fileSize, w, h, format) {
-    var fmt = FORMATS[format];
-    if (!fmt) return 0;
-    var frameSize = fmt.bytesPerFrame(w, h);
-    if (frameSize <= 0) return 0;
-    return Math.floor(fileSize / frameSize);
   }
 
   // ---------- 帧平面提取 ----------
@@ -145,16 +136,32 @@ var YuvParser = (function () {
   // ---------- YUV → RGBA 转换 ----------
   // format: FORMATS key；matrix: "bt601" | "bt709"；fullRange: true/false
   // limited range: Y ∈ [16,235], C ∈ [16,240]; full: [0,255]
-  function yuvToRGBA(w, h, format, planes, matrix, fullRange) {
-    var fmt = FORMATS[format];
-    if (!fmt) return null;
+  // 256 项 Y/色度查找表（仅依赖 matrix/range，全局缓存）
+  var lutCache = null, lutKey = null;
+  function getLuts(matrix, fullRange) {
+    var key = matrix + ":" + (fullRange ? 1 : 0);
+    if (lutCache && lutKey === key) return lutCache;
     var Kr = (matrix === "bt709") ? 0.2126 : 0.299;
     var Kb = (matrix === "bt709") ? 0.0722 : 0.114;
     var Kg = 1 - Kr - Kb;
-
     var yScale, cScale, yOff, cOff;
     if (fullRange) { yScale = 1.0; cScale = 1.0; yOff = 0; cOff = 128; }
     else { yScale = 255 / 219; cScale = 255 / 224; yOff = 16; cOff = 128; }
+    var yT = new Float64Array(256), cT = new Float64Array(256);
+    for (var i = 0; i < 256; i++) {
+      yT[i] = (i - yOff) * yScale;
+      cT[i] = (i - cOff) * cScale;
+    }
+    lutCache = { yT: yT, cT: cT, coef1: 2 * (1 - Kr), coef2: 2 * (Kb * (1 - Kb) / Kg), coef3: 2 * (Kr * (1 - Kr) / Kg), coef4: 2 * (1 - Kb) };
+    lutKey = key;
+    return lutCache;
+  }
+
+  function yuvToRGBA(w, h, format, planes, matrix, fullRange) {
+    var fmt = FORMATS[format];
+    if (!fmt) return null;
+    var T = getLuts(matrix, fullRange);
+    var yT = T.yT, cT = T.cT, coef1 = T.coef1, coef2 = T.coef2, coef3 = T.coef3, coef4 = T.coef4;
 
     var y = planes.y, u = planes.u, v = planes.v;
     var out = new Uint8ClampedArray(w * h * 4);
@@ -162,20 +169,27 @@ var YuvParser = (function () {
     var subX = fmt.sub[0], subY = fmt.sub[1];
     var chromaW = Math.floor(w / subX), chromaH = Math.floor(h / subY);
 
+    // 每色度样本预计算 RGB 贡献（420: cw*ch 项，比逐像素浮点运算少 4 倍）
+    var n = chromaW * chromaH;
+    var rAdj = new Float64Array(n), gAdj = new Float64Array(n), bAdj = new Float64Array(n);
+    for (var i = 0; i < n; i++) {
+      var Cuv = cT[u[i]], Cvv = cT[v[i]];
+      rAdj[i] = coef1 * Cvv;
+      gAdj[i] = coef2 * Cuv + coef3 * Cvv;
+      bAdj[i] = coef4 * Cuv;
+    }
+
+    // 每像素：1 次查表 + 3 次加法
     for (var row = 0; row < h; row++) {
-      var cRow = Math.floor(row / subY);
+      var rowBase = row * w;
+      var cBase = (subY === 1 ? row : Math.floor(row / subY)) * chromaW;
       for (var col = 0; col < w; col++) {
-        var Yv = (y[row * w + col] - yOff) * yScale;
-        var cIdx = (subX === 1 && subY === 1) ? (row * w + col) : (cRow * chromaW + Math.floor(col / subX));
-        var Cuv = (u[cIdx] - cOff) * cScale;
-        var Cvv = (v[cIdx] - cOff) * cScale;
-        var R = Yv + 2 * (1 - Kr) * Cvv;
-        var G = Yv - 2 * (Kb * (1 - Kb) / Kg) * Cuv - 2 * (Kr * (1 - Kr) / Kg) * Cvv;
-        var B = Yv + 2 * (1 - Kb) * Cuv;
-        var o = (row * w + col) * 4;
-        out[o] = R;
-        out[o + 1] = G;
-        out[o + 2] = B;
+        var Yv = yT[y[rowBase + col]];
+        var cIdx = (subX === 1) ? (rowBase + col) : (cBase + (col >> 1));
+        var o = (rowBase + col) * 4;
+        out[o] = Yv + rAdj[cIdx];
+        out[o + 1] = Yv - gAdj[cIdx];
+        out[o + 2] = Yv + bAdj[cIdx];
         out[o + 3] = 255;
       }
     }
@@ -191,8 +205,9 @@ var YuvParser = (function () {
     FORMATS: FORMATS,
     FORMAT_ORDER: FORMAT_ORDER,
     COMMON_RESOLUTIONS: COMMON_RESOLUTIONS,
+    MAX_WIDTH: MAX_WIDTH,
+    MAX_HEIGHT: MAX_HEIGHT,
     guessFormat: guessFormat,
-    frameCount: frameCount,
     getFrame: getFrame,
     yuvToRGBA: yuvToRGBA,
     autoColorMatrix: autoColorMatrix
