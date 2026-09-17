@@ -57,13 +57,15 @@
   // 时间轴布局常量
   var TL_LABEL_H = 24;        // 顶部帧号/POC 标记区高度(px)
   var TL_BAR_H = 36;          // 色块区高度(px)
-  var TL_MIN_BAR_W = 0.8;     // 色块最小宽度(px)
+  var TL_MIN_BAR_W = 0.01;    // 色块最小宽度(px)，允许最小缩放时充分收缩
   var TL_FRAME_GAP_RATIO = 0.8; // 帧间空隙 = barW * 该比例（至少 2px）
   var TL_INNER_GAP_RATIO = 0.12; // 帧内 slice 间隙 = barW * 该比例
   var TL_MARK_STEP = 44;      // 帧号/POC 标记至少间隔(px)
+  var TL_MIN_FRAME_W = 6;     // 最小帧宽度(px)，防止多slice帧过窄（较小以适应长视频）
+  var TL_MIN_CLICKABLE_FRAME_W = 10; // 单slice帧最小可点击宽度(px)
   var TL_ZOOM_STEP = 1.5;     // 缩放每步倍数
   var TL_ZOOM_MIN = 0.25;     // 最小缩放
-  var TL_ZOOM_MAX = 64;       // 最大缩放
+  var TL_ZOOM_MAX = 8;        // 最大缩放，防止 canvas 过大导致白屏
   // 播放常量
   var PLAY_DECODE_LEAD = 16;  // 播放时解码领先帧数
   var PLAY_FRAME_KEEP = 24;   // 保留最近多少已解码帧
@@ -681,13 +683,23 @@
     }
     timeline._keyFrames = keyFrames;
 
+    // 自动调整缩放以适应视口：计算缩放=1时的宽度，如果太宽则降低缩放
+    var wrapW = timeline.parentNode.clientWidth - 24;
+    var estSliceW1 = TL_MIN_BAR_W + Math.max(0, Math.round(TL_MIN_BAR_W * TL_INNER_GAP_RATIO));
+    var estFrameGap1 = Math.round(TL_MIN_BAR_W * TL_FRAME_GAP_RATIO);
+    var estWidth1 = slices.length * estSliceW1 + frames.length * estFrameGap1;
+    if (estWidth1 > wrapW * 1.5) {
+      var targetZoom = (wrapW * 0.9) / estWidth1;
+      timelineZoom = Math.max(TL_ZOOM_MIN, Math.min(timelineZoom, targetZoom));
+    }
+
     var dpr = window.devicePixelRatio || 1;
     var labelH = TL_LABEL_H;
     var barH = TL_BAR_H;
     var wrapW = timeline.parentNode.clientWidth - 24;
     var fitBarW = wrapW / slices.length;
     var barW = Math.max(TL_MIN_BAR_W, fitBarW * timelineZoom);
-    var frameGap = Math.max(2, Math.round(barW * TL_FRAME_GAP_RATIO));
+    var frameGap = Math.round(barW * TL_FRAME_GAP_RATIO);
     var innerGap = Math.max(0, Math.round(barW * TL_INNER_GAP_RATIO));
 
     // 计算每个 slice 的 x 坐标（帧之间插入物理空隙）
@@ -696,17 +708,36 @@
     for (var fi = 0; fi < frames.length; fi++) {
       if (fi > 0) cursor += frameGap;
       var f = frames[fi];
+      var sliceCount = f.last - f.first + 1;
       for (var si = f.first; si <= f.last; si++) {
         xs[si] = cursor;
         cursor += barW + innerGap;
       }
+      // 单slice帧：确保最小可点击宽度
+      if (sliceCount === 1) {
+        var frameStartX = xs[f.first];
+        var frameEndX = frameStartX + barW;
+        var frameWidth = frameEndX - frameStartX;
+        if (frameWidth < TL_MIN_CLICKABLE_FRAME_W) {
+          cursor += TL_MIN_CLICKABLE_FRAME_W - frameWidth;
+        }
+      }
     }
+
     var w = cursor;
     var h = labelH + barH;
+    // 限制 canvas 最大尺寸，防止内存溢出/白屏
+    var MAX_CANVAS_W = 32768;
+    if (w * dpr > MAX_CANVAS_W) {
+      var scale = MAX_CANVAS_W / (w * dpr);
+      w = Math.floor(w * scale);
+      timelineZoom = timelineZoom * scale;
+    }
     timeline.style.width = w + "px";
     timeline.style.height = h + "px";
     timeline.width = w * dpr;
     timeline.height = h * dpr;
+    console.log('[Timeline] Total width:', w, 'clientWidth:', timeline.parentNode.clientWidth, 'scrollWidth:', timeline.parentNode.scrollWidth, 'zoom:', timelineZoom);
     var ctx = timeline.getContext("2d");
     var colors = { 2: "#E02020", 0: "#4d94e8", 1: "#00B050" };
     var barTop = labelH;
@@ -759,7 +790,14 @@
       var hlW = Math.max(1, barW - 1);
       for (var hi = 0; hi < frames.length; hi++) {
         if (frames[hi].first === selectedSlice) {
-          hlW = Math.max(1, (frames[hi].last - frames[hi].first + 1) * (barW + innerGap) - innerGap - 1);
+          var sliceCount = frames[hi].last - frames[hi].first + 1;
+          if (sliceCount > 1) {
+            hlW = Math.max(1, sliceCount * (barW + innerGap) - innerGap - 1);
+          } else {
+            // 单slice帧：使用帧实际宽度（含扩展后的最小可点击宽度）
+            var nextFrameStart = (hi + 1 < frames.length) ? xs[frames[hi + 1].first] : w;
+            hlW = Math.max(TL_MIN_CLICKABLE_FRAME_W, nextFrameStart - hx - frameGap);
+          }
           break;
         }
       }
@@ -820,7 +858,7 @@
     return timeline._tip;
   }
   function sliceAtX(x) {
-    var xs = timeline._xs, barW = timeline._barW;
+    var xs = timeline._xs, barW = timeline._barW, frames = timeline._frames;
     if (!xs || xs.length === 0) return -1;
     // 二分查找最后一个 xs[i] <= x 的 i（落在色块内）
     var lo = 0, hi = xs.length - 1, ans = -1;
@@ -829,8 +867,14 @@
       if (xs[mid] <= x) { ans = mid; lo = mid + 1; } else { hi = mid - 1; }
     }
     if (ans >= 0 && ans < xs.length) {
-      // 若 x 落在帧间空隙或超过色块右边界，则不属于任何 slice
-      if (x > xs[ans] + barW) return -1;
+      // 单slice帧：扩大点击区域到最小可点击宽度
+      var frameGap = timeline._frameGap || 0;
+      var frameIdx = frameIndexOfSlice(ans);
+      var hitW = barW;
+      if (frameIdx >= 0 && frames[frameIdx].last === frames[frameIdx].first) {
+        hitW = Math.max(barW, TL_MIN_CLICKABLE_FRAME_W);
+      }
+      if (x > xs[ans] + hitW) return -1;
       return ans;
     }
     return -1;
@@ -840,6 +884,7 @@
     var rect = timeline.getBoundingClientRect();
     var x = e.clientX - rect.left;
     var idx = sliceAtX(x);
+    console.log('[TimelineMove] clientX:', e.clientX, 'rect.left:', rect.left, 'x:', x, 'idx:', idx);
     if (idx < 0 || idx >= timeline._slices.length) { timelineTip().style.display = "none"; return; }
     var s = timeline._slices[idx];
     var t = { 2: "I", 0: "P", 1: "B" }[s.type] || "?";
@@ -1162,10 +1207,18 @@ timeline.addEventListener("click", function (e) {
     if (sliceIndex >= 0 && sliceIndex < slices.length) {
       var hx = xs[sliceIndex];
       var innerGap = timeline._innerGap || 0;
+      var frameGap = timeline._frameGap || 0;
       var hlW = Math.max(1, barW - 1);
       for (var hi = 0; hi < timeline._frames.length; hi++) {
         if (timeline._frames[hi].first === sliceIndex) {
-          hlW = Math.max(1, (timeline._frames[hi].last - timeline._frames[hi].first + 1) * (barW + innerGap) - innerGap - 1);
+          var sliceCount = timeline._frames[hi].last - timeline._frames[hi].first + 1;
+          if (sliceCount > 1) {
+            hlW = Math.max(1, sliceCount * (barW + innerGap) - innerGap - 1);
+          } else {
+            // 单slice帧：使用帧实际宽度（含扩展后的最小可点击宽度）
+            var nextFrameStart = (hi + 1 < timeline._frames.length) ? xs[timeline._frames[hi + 1].first] : (timeline.width / (window.devicePixelRatio || 1));
+            hlW = Math.max(TL_MIN_CLICKABLE_FRAME_W, nextFrameStart - hx - frameGap);
+          }
           break;
         }
       }

@@ -113,6 +113,10 @@ body { display: flex; flex-direction: column; }
 
 .timeline-panel { flex: 0 0 auto; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
 .timeline-wrap { padding: 6px 12px 10px; overflow-x: auto; }
+.timeline-wrap::-webkit-scrollbar { height: 8px; }
+.timeline-wrap::-webkit-scrollbar-track { background: var(--bg-elevated); border-radius: 4px; }
+.timeline-wrap::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; min-width: 40px; }
+.timeline-wrap::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 .timeline { display: block; cursor: crosshair; }
 .timeline-tip { position: fixed; pointer-events: none; background: rgba(0,0,0,.85); color: #eee; font: 11px monospace; padding: 3px 6px; border-radius: 3px; z-index: 9999; white-space: pre; }
 .preview-view { padding: 4px 0 18px; overflow: hidden; }
