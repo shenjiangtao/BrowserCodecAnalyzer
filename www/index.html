@@ -154,6 +154,21 @@
     <span id="status">Loading parser module...</span>
   </footer>
 
+  <div id="frameModal" class="modal-overlay hidden">
+    <div class="modal frame-modal-box">
+      <div class="modal-head">
+        <span id="frameModalTitle">Frame Preview</span>
+        <div class="frame-modal-actions">
+          <button id="frameModalFit" class="btn btn-secondary btn-small active">Fit</button>
+          <button id="frameModal100" class="btn btn-secondary btn-small">100%</button>
+          <button id="frameModalSave" class="btn btn-small">Save PNG</button>
+          <button id="frameModalClose" class="btn btn-secondary btn-small">✕</button>
+        </div>
+      </div>
+      <div id="frameModalBody" class="frame-modal-body"></div>
+    </div>
+  </div>
+
   <div id="helpModal" class="modal-overlay hidden">
     <div class="modal">
       <div class="modal-head">

@@ -88,6 +88,13 @@ body { display: flex; flex-direction: column; }
 .modal-body li { margin: 3px 0; }
 .modal-body a { color: #7ec8ff; }
 
+.frame-modal-box { width: min(92vw, calc(100vw - 48px)); max-height: 92vh; }
+.frame-modal-actions { display: flex; gap: 6px; align-items: center; }
+.frame-modal-actions .btn-small.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.frame-modal-body { overflow: auto; max-height: calc(92vh - 90px); text-align: center; background: #111; }
+.frame-modal-body canvas { display: block; margin: 0 auto; image-rendering: pixelated; }
+.frame-modal-body.fit canvas { max-width: 100%; max-height: calc(92vh - 110px); width: auto; height: auto; }
+
 .codec-badge {
   padding: 5px 14px; border-radius: 999px; font-size: 12px; font-weight: 600;
   background: var(--accent-soft); color: #7ec8ff; border: 1px solid var(--accent);
