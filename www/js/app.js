@@ -11,6 +11,7 @@
   var currentContainerInfo = null; // MP4 容器级信息（General/Video/Audio/Other）
   var currentImageBlob = null;     // HEIC/HEIF 原始文件 Blob（用于原生解码预览）
   var currentHeicRawBytes = null;  // HEIC 原始字节（用于 libheif 解码）
+  var currentYuv = null;           // YUV raw 设置（width/height/format/fps/matrix/frameSize/frames）
   var selectedIndex = -1;
 
   var statusEl = document.getElementById("status");
@@ -119,6 +120,15 @@
       d.innerHTML = '<span class="label">' + label + '</span><span class="value">' + value + "</span>";
       statsBar.appendChild(d);
     }
+    if (currentData && currentData.isYuv) {
+      var yu = currentData.yuv;
+      stat("Format", yu.formatName);
+      stat("Resolution", yu.width + " x " + yu.height);
+      stat("Frames", yu.frames);
+      stat("FPS", yu.fps);
+      stat("Profile", si.profile);
+      return;
+    }
     stat("NALUs", si.nalus);
     stat("Slices", si.slices);
     stat("I", si.i + (si.iPct !== undefined ? " (" + si.iPct + "%)" : ""));
@@ -143,6 +153,7 @@
     if (currentCodec === "vvc") return "VVC (Versatile Video Coding) / H.266";
     if (currentCodec === "av1") return "AV1 (AOMedia Video 1)";
     if (currentCodec === "vp9") return "VP9 (Google/On2)";
+    if (currentCodec === "yuv") return "Raw YUV (uncompressed)";
     if (currentCodec === "jpeg") return "JPEG (Joint Photographic Experts Group)";
     if (currentCodec === "image") return "Image (no bitstream syntax)";
     return "Unknown";
@@ -153,6 +164,7 @@
     if (currentCodec === "vvc") return "VVC";
     if (currentCodec === "av1") return "AV1";
     if (currentCodec === "vp9") return "VP9";
+    if (currentCodec === "yuv") return "YUV";
     if (currentCodec === "jpeg") return "JPEG";
     if (currentCodec === "image") return "Image";
     return "?";
@@ -213,6 +225,43 @@
     var fname = srcFile;
     var m = /^(.*?) \(([\d.]+) MB\)$/.exec(srcFile);
     if (m) fname = m[1];
+
+    // ---- YUV raw ----
+    if (currentData.isYuv) {
+      var yu = currentData.yuv;
+      var yGeneralChildren = [
+        { n: "Complete name: " + fname },
+        { n: "Format: Raw YUV (uncompressed)" },
+        { n: "File size: " + fmtSize(fileBytes ? fileBytes.length : 0) },
+        { n: "Duration: " + fmtDuration(yu.frames / yu.fps) }
+      ];
+      if (yu.mtime) yGeneralChildren.push({ n: "Encoded date: " + yu.mtime });
+      var yVideoChildren = [
+        { n: "Format: " + yu.formatName },
+        { n: "Pixel arrangement: " + yu.arrangement },
+        { n: "Width: " + yu.width + " pixels" },
+        { n: "Height: " + yu.height + " pixels" },
+        { n: "Frame rate: " + yu.fps + " FPS" },
+        { n: "Frame size: " + fmtSize(yu.frameSize) },
+        { n: "Frame count: " + yu.frames },
+        { n: "Frame index: 0 .. " + (yu.frames - 1) + " (timestamp = index / fps)" },
+        { n: "Color space: YUV" },
+        { n: "Color matrix: " + (yu.colorMatrix === "bt709" ? "BT.709" : "BT.601") },
+        { n: "Color range: " + (yu.fullRange ? "Full" : "Limited (assumed)") }
+      ];
+      if (yu.frames > 0) yVideoChildren.push({ n: "Bit rate: " + fmtBitrate(fileBytes.length * 8 * yu.fps / yu.frames) });
+      var yRoots = [
+        { n: "General", c: yGeneralChildren },
+        { n: "Video", c: yVideoChildren }
+      ];
+      // 附加元数据占位（SEI-like：传感器/GPS/IMU，数据源待接入）
+      yRoots.push({ n: "Additional Metadata (SEI-like)", c: [
+        { n: "Sensor params: no data source" },
+        { n: "GPS: no data source" },
+        { n: "IMU: no data source" }
+      ] });
+      return { n: "MediaInfo", c: yRoots };
+    }
 
     // ---- General ----
     var generalChildren = [{ n: "Complete name: " + fname }];
@@ -373,6 +422,205 @@
     return { slices: slices, frames: frames };
   }
 
+  // ---------- YUV raw 支持 ----------
+  // 构建 YUV 数据模型：每帧一个"slice"（等大的原始帧数据块）
+  function buildYuvData(bytes, width, height, format, fps, matrix, mtime) {
+    var fmt = YuvParser.FORMATS[format];
+    var frameSize = fmt.bytesPerFrame(width, height);
+    if (!frameSize || frameSize <= 0) throw new Error("Invalid frame size for " + width + "x" + height + " " + format);
+    var frames = Math.floor(bytes.length / frameSize);
+    if (frames <= 0) throw new Error("File too small: " + bytes.length + " bytes < frame size " + frameSize);
+
+    var warnings = [];
+    if (bytes.length % frameSize !== 0)
+      warnings.push({ position: frames * frameSize, type: 1, message: "File size " + bytes.length + " not divisible by frame size " + frameSize + " (" + fmt.name + " " + width + "x" + height + ") — last frame incomplete" });
+    if (frames > 100000)
+      warnings.push({ position: 0, type: 1, message: "Very large frame count (" + frames + ") — timeline may be slow" });
+
+    var nalus = [];
+    for (var i = 0; i < frames; i++) {
+      nalus.push({ offset: i * frameSize, length: frameSize, type: 0, typeName: "YUV Frame", info: "#" + i + " · " + (i / fps).toFixed(3) + "s", color: "#7ec8ff", sliceType: 2, firstSlice: 1, frameIdx: i });
+    }
+    return {
+      codec: "yuv",
+      isYuv: true,
+      yuv: { width: width, height: height, format: format, formatName: fmt.name, arrangement: fmt.arrangement, fps: fps, frameSize: frameSize, frames: frames, colorMatrix: matrix, fullRange: false, mtime: mtime },
+      nalus: nalus,
+      streamInfo: { nalus: frames, slices: frames, i: frames, p: 0, b: 0, profile: "Raw YUV", level: "-", picWidth: width, picHeight: height, fps: String(fps) },
+      hdr: { picWidth: width, picHeight: height },
+      warnings: warnings
+    };
+  }
+
+  // YUV 单帧 → previewCanvas
+  function drawYuvFrame(frameIndex) {
+    if (!currentData || !currentData.isYuv || !fileBytes) return;
+    var yu = currentData.yuv;
+    var frameSize = yu.frameSize;
+    if (frameIndex < 0 || frameIndex >= yu.frames) return;
+    var planes = YuvParser.getFrame(fileBytes, frameIndex * frameSize, yu.width, yu.height, yu.format);
+    if (!planes) { previewMsg.textContent = "Frame data out of range"; return; }
+    var rgba = YuvParser.yuvToRGBA(yu.width, yu.height, yu.format, planes, yu.colorMatrix, yu.fullRange);
+    var c = previewCanvas;
+    var w = yu.width, h = yu.height;
+    var maxW = previewView.clientWidth - 32;
+    var maxH = 480;
+    if (maxW < 160) maxW = 160;
+    var scale = Math.min(1, maxW / w, maxH / h);
+    c.width = Math.max(1, Math.round(w * scale));
+    c.height = Math.max(1, Math.round(h * scale));
+    previewCanvasTouched = true;
+    var ctx = c.getContext("2d");
+    var imgData = ctx.createImageData(c.width, c.height);
+    // 逐像素最近邻缩放（rgba → 缩放后画布）
+    var sw = c.width, sh = c.height;
+    var d = imgData.data;
+    for (var row = 0; row < sh; row++) {
+      var sy = Math.min(h - 1, Math.floor(row / scale));
+      for (var col = 0; col < sw; col++) {
+        var sx = Math.min(w - 1, Math.floor(col / scale));
+        var so = (sy * w + sx) * 4, to = (row * sw + col) * 4;
+        d[to] = rgba[so]; d[to + 1] = rgba[so + 1]; d[to + 2] = rgba[so + 2]; d[to + 3] = 255;
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+    var ts = (frameIndex / yu.fps).toFixed(3);
+    previewHint.textContent = "Frame " + frameIndex + " / POC " + frameIndex + " · " + ts + "s" + (yu.mtime ? " · captured " + yu.mtime : "");
+    previewMsg.textContent = "";
+  }
+
+var yuvPlay = { active: false, timer: null, frameIdx: 0 };
+
+  function startYuvPlayback() {
+    if (yuvPlay.active) { stopPlayback(); return; }
+    if (!currentData || !currentData.isYuv) return;
+    var yu = currentData.yuv;
+    if (!yu || yu.frames <= 0) return;
+    yuvPlay.active = true;
+    yuvPlay.frameIdx = 0;
+    previewPlayBtn.textContent = "⏸ Pause";
+    previewMsg.textContent = "";
+    resetPlayProgress(0);
+    var iv = Math.max(1, Math.round(1000 / yu.fps));
+    yuvPlay.timer = setInterval(function () {
+      if (!yuvPlay.active) return;
+      if (yuvPlay.frameIdx >= yu.frames) { stopPlayback(); return; }
+      var fi = yuvPlay.frameIdx++;
+      var f = timeline._frames ? timeline._frames[fi] : null;
+      if (f) { updatePlayProgress(f.first); highlightFrame(f.first); }
+      drawYuvFrame(fi);
+    }, iv);
+  }
+
+  // YUV 设置面板：显示并填充当前值
+  function showYuvSettings() {
+    var panel = document.getElementById("yuvSettingsPanel");
+    if (!panel || !currentData || !currentData.isYuv) return;
+    panel.classList.remove("hidden");
+    var yu = currentData.yuv;
+    document.getElementById("yuvWidth").value = yu.width || "";
+    document.getElementById("yuvHeight").value = yu.height || "";
+    document.getElementById("yuvFormat").value = yu.format;
+    document.getElementById("yuvFps").value = yu.fps;
+    document.getElementById("yuvMatrix").value = yu.colorMatrix;
+    var guessEl = document.getElementById("yuvGuess");
+    var frameSize = (yu.width && yu.height) ? YuvParser.FORMATS[yu.format].bytesPerFrame(yu.width, yu.height) : 0;
+    if (yu.width && yu.height) {
+      var frames = Math.floor(fileBytes.length / frameSize);
+      var partial = (fileBytes.length % frameSize !== 0) ? " (incomplete last frame)" : "";
+      guessEl.textContent = "Frame size " + frameSize + " B · " + frames + " frames" + partial + (yu.guessed ? " · auto-guessed" : "");
+    } else {
+      guessEl.textContent = "Size " + fileBytes.length + " B does not match any common resolution — enter width/height";
+    }
+  }
+
+  // Apply：读取设置重新解析
+  function applyYuvSettings() {
+    if (!currentData || !currentData.isYuv || !fileBytes) return;
+    var w = parseInt(document.getElementById("yuvWidth").value, 10);
+    var h = parseInt(document.getElementById("yuvHeight").value, 10);
+    var fmt = document.getElementById("yuvFormat").value;
+    var fps = parseFloat(document.getElementById("yuvFps").value);
+    var matrix = document.getElementById("yuvMatrix").value;
+    if (!w || w <= 0 || !h || h <= 0) { previewMsg.textContent = "Invalid resolution"; return; }
+    if (!fps || fps <= 0) fps = 30;
+    if (!YuvParser.FORMATS[fmt]) { previewMsg.textContent = "Unknown format"; return; }
+    var mtime = currentData.yuv ? currentData.yuv.mtime : null;
+    var keepFrame = (currentData.yuv && currentData.yuv.frames > 0) ? frameIndexOfSlice(selectedSlice) : -1;
+    try {
+      var data = buildYuvData(fileBytes, w, h, fmt, fps, matrix, mtime);
+      currentData = data;
+      currentYuv = { width: w, height: h, format: fmt, fps: fps, matrix: matrix, mtime: mtime, guessed: false, alternatives: [] };
+      currentWarnings = data.warnings || [];
+      computeFrames();
+      renderStats(data.streamInfo);
+      renderNalTable();
+      renderHdr(data.hdr);
+      renderWarnings();
+      renderTimeline();
+      showYuvSettings();
+      // 恢复到之前的帧位置
+      var fi = keepFrame >= 0 ? Math.min(keepFrame, data.yuv.frames - 1) : 0;
+      selectedSlice = timeline._frames[fi].first;
+      selectNal(timeline._slices[selectedSlice].index, true);
+      renderTimeline();
+      if (!previewView.classList.contains("hidden")) previewFrame(timeline._frames[fi].first);
+      if (!bitrateView.classList.contains("hidden")) renderBitrate();
+      setStatus("YUV re-parsed: " + w + "x" + h + " " + YuvParser.FORMATS[fmt].name + " @ " + fps + "fps, " + data.yuv.frames + " frames");
+    } catch (err) {
+      previewMsg.textContent = "YUV parse error: " + err.message;
+    }
+  }
+
+  var yuvApplyBtn = document.getElementById("yuvApplyBtn");
+  if (yuvApplyBtn) yuvApplyBtn.addEventListener("click", applyYuvSettings);
+  // 色彩矩阵/格式切换：更新设置并即时重绘当前预览
+  function onYuvQuickChange() {
+    if (!currentData || !currentData.isYuv) return;
+    var matrix = document.getElementById("yuvMatrix").value;
+    var fmt = document.getElementById("yuvFormat").value;
+    if (matrix !== currentData.yuv.colorMatrix || fmt !== currentData.yuv.format) {
+      currentData.yuv.colorMatrix = matrix;
+      if (fmt !== currentData.yuv.format) {
+        currentData.yuv.format = fmt;
+        currentData.yuv.formatName = YuvParser.FORMATS[fmt].name;
+        currentData.yuv.arrangement = YuvParser.FORMATS[fmt].arrangement;
+        // 格式变化改变帧大小 → 需重新解析
+        applyYuvSettings();
+        return;
+      }
+      if (!previewView.classList.contains("hidden") && selectedSlice >= 0) drawYuvFrame(frameIndexOfSlice(selectedSlice));
+      if (!mediaInfoView.classList.contains("hidden")) { renderMediaInfo(); }
+    }
+  }
+  var yuvMatrixSel = document.getElementById("yuvMatrix");
+  var yuvFormatSel = document.getElementById("yuvFormat");
+  if (yuvMatrixSel) yuvMatrixSel.addEventListener("change", onYuvQuickChange);
+  if (yuvFormatSel) yuvFormatSel.addEventListener("change", onYuvQuickChange);
+
+  // YUV 帧语法节点（不调用 WASM）
+  function buildYuvSyntaxNode(frameIndex) {
+    var yu = currentData.yuv;
+    var frameSize = yu.frameSize;
+    var ts = (frameIndex / yu.fps).toFixed(3);
+    var children = [
+      { n: "frame_size = " + frameSize + " bytes" },
+      { n: "offset = " + hex8(frameIndex * frameSize) },
+      { n: "pixel_format = " + yu.formatName },
+      { n: "arrangement = " + yu.arrangement },
+      { n: "width = " + yu.width },
+      { n: "height = " + yu.height },
+      { n: "frame_index = " + frameIndex },
+      { n: "timestamp = " + ts + "s (index / fps)" },
+      { n: "fps = " + yu.fps },
+      { n: "color_matrix = " + (yu.colorMatrix === "bt709" ? "BT.709" : "BT.601") },
+      { n: "color_range = " + (yu.fullRange ? "full" : "limited") }
+    ];
+    if (yu.mtime) children.push({ n: "capture_time (file mtime) = " + yu.mtime });
+    children.push({ n: "additional_metadata (SEI-like) = no data source" });
+    return { n: "YUV Frame #" + frameIndex, c: children };
+  }
+
   function makeRow(i) {
     var n = currentData.nalus[i];
     var row = document.createElement("div");
@@ -409,6 +657,7 @@
   }
 
   function updateVisibleRows() {
+    if (!currentData) return;
     var total = currentData.nalus.length;
     var scrollTop = nalScroll.scrollTop;
     var viewHeight = nalScroll.clientHeight;
@@ -890,7 +1139,11 @@
     var t = { 2: "I", 0: "P", 1: "B" }[s.type] || "?";
     var fi = frameIndexOfSlice(idx);
     var frameLabel = fi >= 0 ? fi : "?";
-    timelineTip().textContent = "Frame " + frameLabel + "  [" + t + "]\nPOC " + s.poc;
+    var tip = "Frame " + frameLabel + "  [" + t + "]\nPOC " + s.poc;
+    if (currentData && currentData.isYuv && fi >= 0 && currentData.yuv) {
+      tip += "\nTimestamp " + (fi / currentData.yuv.fps).toFixed(3) + "s";
+    }
+    timelineTip().textContent = tip;
     timelineTip().style.display = "block";
     timelineTip().style.left = (e.clientX + 12) + "px";
     timelineTip().style.top = (e.clientY + 12) + "px";
@@ -1261,6 +1514,8 @@ timeline.addEventListener("click", function (e) {
   function stopPlayback() {
     if (play.timer) { clearInterval(play.timer); play.timer = null; }
     play.active = false;
+    if (yuvPlay.timer) { clearInterval(yuvPlay.timer); yuvPlay.timer = null; }
+    yuvPlay.active = false;
     if (vvdecPlay.timer) { clearInterval(vvdecPlay.timer); vvdecPlay.timer = null; }
     vvdecPlay.active = false;
     if (vvdecPlay.decoder) { try { vvdecPlay.decoder.delete(); } catch (e) {} vvdecPlay.decoder = null; }
@@ -1271,8 +1526,9 @@ timeline.addEventListener("click", function (e) {
   }
 
   function startPlayback() {
-    if (play.active || vvdecPlay.active || av1Play.active) { stopPlayback(); return; }
+    if (play.active || vvdecPlay.active || av1Play.active || yuvPlay.active) { stopPlayback(); return; }
     if (currentData && currentData.isImage) { return; }
+    if (currentData && currentData.isYuv) { startYuvPlayback(); return; }
     if (currentCodec === "vvc") { startVvcPlayback(); return; }
     if (currentCodec === "av1") { startAv1Playback(); return; }
     var frames = timeline._frames;
@@ -1876,6 +2132,15 @@ timeline.addEventListener("click", function (e) {
 
   function previewFrame(sliceIndex) {
     if (!fileBytes || !currentData) return;
+    if (currentData.isYuv) {
+      if (play.active || vvdecPlay.active || yuvPlay.active) stopPlayback();
+      var yu0 = currentData.yuv;
+      if (!yu0 || yu0.frames <= 0) { previewMsg.textContent = "Set resolution/format in YUV Settings"; return; }
+      var fi0 = frameIndexOfSlice(sliceIndex);
+      if (fi0 < 0) fi0 = 0;
+      drawYuvFrame(fi0);
+      return;
+    }
     if (currentData.isImage) {
       if (play.active || vvdecPlay.active) stopPlayback();
       if (play.decoder) { try { play.decoder.close(); } catch (e) {} play.decoder = null; }
@@ -1997,6 +2262,19 @@ timeline.addEventListener("click", function (e) {
       d.innerHTML = '<span class="k">' + k + '</span><span class="v">' + v + "</span>";
       hdrInfo.appendChild(d);
     }
+    if (currentData && currentData.isYuv) {
+      var yu = currentData.yuv;
+      row("Format", yu.formatName + " (" + yu.arrangement + ")");
+      row("Resolution", yu.width + " x " + yu.height);
+      row("Frame rate", yu.fps + " FPS");
+      row("Frame size", fmtSize(yu.frameSize));
+      row("Frames", yu.frames);
+      row("Color matrix", yu.colorMatrix === "bt709" ? "BT.709" : "BT.601");
+      row("Color range", yu.fullRange ? "Full" : "Limited (assumed)");
+      if (yu.mtime) row("Capture time (file mtime)", yu.mtime);
+      row("Additional metadata (SEI-like)", "no data source — sensor/GPS/IMU placeholder");
+      return;
+    }
     row("Colour primaries", h.colourPrimaries);
     row("Transfer characteristics", h.transferCharacteristics);
     row("Matrix coefficients", h.matrixCoefficients);
@@ -2039,7 +2317,7 @@ timeline.addEventListener("click", function (e) {
       rows[i].classList.toggle("selected", parseInt(rows[i].dataset.index, 10) === index);
     }
 
-    var syntaxNode = nal.jpegSyntax || fetchNalSyntax(index);
+    var syntaxNode = nal.jpegSyntax || (currentData && currentData.isYuv ? buildYuvSyntaxNode(index) : fetchNalSyntax(index));
     if (!nal.jpegSyntax && /SEI/i.test(nal.typeName || "") && window.BrowserCodecAnalyzer && window.BrowserCodecAnalyzer.runSeiPlugin) {
       var pnode = window.BrowserCodecAnalyzer.runSeiPlugin(fileBytes, nal, currentCodec);
       if (pnode) {
@@ -2127,7 +2405,7 @@ timeline.addEventListener("click", function (e) {
   });
 
   function stepFrame(delta) {
-    if (play.active || vvdecPlay.active) stopPlayback();
+    if (play.active || vvdecPlay.active || yuvPlay.active) stopPlayback();
     if (currentData && currentData.isImage) return;
     var frames = timeline._frames;
     if (!frames || frames.length === 0) return;
@@ -2159,6 +2437,11 @@ timeline.addEventListener("click", function (e) {
     play.displayOrder = false;
     var previewOrderBtn = document.getElementById("previewOrderBtn");
     if (previewOrderBtn) { previewOrderBtn.textContent = "Decode Order"; }
+    if (yuvPlay.timer) { clearInterval(yuvPlay.timer); yuvPlay.timer = null; }
+    yuvPlay.active = false;
+    yuvPlay.frameIdx = 0;
+    var yuvSettingsPanel = document.getElementById("yuvSettingsPanel");
+    if (yuvSettingsPanel) yuvSettingsPanel.classList.add("hidden");
     if (vvdecPlay.decoder) { try { vvdecPlay.decoder.delete(); } catch (e) {} vvdecPlay.decoder = null; }
     vvdecPlay.nalIdx = 0;
     vvdecPlay.cts = 0;
@@ -2179,6 +2462,7 @@ timeline.addEventListener("click", function (e) {
     currentContainerInfo = null;
     currentImageBlob = null;
     currentHeicRawBytes = null;
+    currentYuv = null;
     selectedIndex = -1;
     selectedSlice = -1;
     hlFrame = { slice: -1, x: 0, w: 0 };
@@ -2233,8 +2517,36 @@ timeline.addEventListener("click", function (e) {
         var imageW = 0, imageH = 0;
         var result = null;
         var hintCodec = null;
-        var simpleImageType = H26xDemux.detectImageType(rawBytes);
-        if (simpleImageType === "image/jpeg") {
+        var isYuvFile = /\.yuv$/i.test(file.name);
+        var simpleImageType = isYuvFile ? null : H26xDemux.detectImageType(rawBytes);
+        if (isYuvFile) {
+          // YUV raw：无头信息，按文件大小猜测尺寸/格式，用户可在设置面板修改
+          fileBytes = rawBytes;
+          currentDescription = null;
+          currentNalLengthSize = 4;
+          currentContainerInfo = null;
+          var mtime = file.lastModified ? new Date(file.lastModified).toLocaleString() : null;
+          var guess = YuvParser.guessFormat(rawBytes.length);
+          var gw = guess ? guess.width : 0, gh = guess ? guess.height : 0;
+          var gf = guess ? guess.format : "i420";
+          var gfps = 30;
+          var gmatrix = YuvParser.autoColorMatrix(gh);
+          currentYuv = { width: gw, height: gh, format: gf, fps: gfps, matrix: gmatrix, mtime: mtime, guessed: !!guess, alternatives: guess ? guess.alternatives : [] };
+          try {
+            result = { codec: "yuv", data: buildYuvData(rawBytes, gw, gh, gf, gfps, gmatrix, mtime) };
+            srcNote = " (YUV raw" + (guess ? ", guessed " + YuvParser.FORMATS[gf].name + " " + gw + "x" + gh : ", unknown size") + ")";
+          } catch (yuvErr) {
+            // 猜测失败（文件大小无法整除任何常见候选）：仍显示设置面板等待用户输入
+            result = {
+              codec: "yuv",
+              data: {
+                codec: "yuv", isYuv: true, yuv: { width: 0, height: 0, format: gf, formatName: YuvParser.FORMATS[gf].name, fps: gfps, frameSize: 0, frames: 0, colorMatrix: gmatrix, fullRange: false, mtime: mtime },
+                nalus: [], streamInfo: { nalus: 0, slices: 0, i: 0, p: 0, b: 0, profile: "Raw YUV", level: "-" }, hdr: {}, warnings: []
+              }
+            };
+            srcNote = " (YUV raw, size not divisible — set resolution/format)";
+          }
+        } else if (simpleImageType === "image/jpeg") {
           var jpeg = (typeof JpegParser !== "undefined") ? JpegParser.parseJpeg(rawBytes) : null;
           currentImageBlob = new Blob([rawBytes], { type: "image/jpeg" });
           currentHeicRawBytes = null;
@@ -2418,6 +2730,14 @@ timeline.addEventListener("click", function (e) {
           }
         }
         computeFrames();
+
+        // YUV：显示设置面板（填充当前猜测值）
+        var yuvSettingsPanel = document.getElementById("yuvSettingsPanel");
+        if (currentData.isYuv) {
+          showYuvSettings();
+        } else if (yuvSettingsPanel) {
+          yuvSettingsPanel.classList.add("hidden");
+        }
 
         var si = result.data.streamInfo;
         var badgeText = result.imageLabel || currentCodec.toUpperCase();

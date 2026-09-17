@@ -6,6 +6,7 @@
 *.dll
 *.dylib
 hevcparser_native
+dist/
 
 # IDE/editor
 .vscode/

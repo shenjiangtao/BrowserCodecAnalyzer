@@ -13,7 +13,7 @@
     <div class="header-actions">
       <span id="codecBadge" class="codec-badge hidden"></span>
       <button id="resetBtn" class="btn btn-secondary hidden">Reset</button>
-      <input type="file" id="fileInput" hidden accept="video/*,image/*,.h264,.h265,.hevc,.h266,.vvc,.266,.265,.264,.avc,.bin,.bit,.mp4,.m4v,.mov,.webm,.ts,.m2ts,.mts,.heic,.heif,.avif,.av1,.ivf,.obu,.png,.jpg,.jpeg,.gif,.webp,.bmp">
+      <input type="file" id="fileInput" hidden accept="video/*,image/*,.h264,.h265,.hevc,.h266,.vvc,.266,.265,.264,.avc,.bin,.bit,.mp4,.m4v,.mov,.webm,.ts,.m2ts,.mts,.heic,.heif,.avif,.av1,.ivf,.obu,.png,.jpg,.jpeg,.gif,.webp,.bmp,.yuv">
       <span id="fileName" class="file-name">No file loaded</span>
       <button id="helpBtn" class="btn btn-secondary" title="Help & About">? Help</button>
       <button id="pluginBtn" class="btn btn-secondary" title="Load a SEI plugin (.js)">⚙ Plugin</button>
@@ -25,12 +25,39 @@
 
   <div id="dropzone" class="dropzone">
     <div class="dropzone-inner">
-      <p>Drop a <strong>.h264 / .h265 / .h266 / .mp4 / .mov / .webm / .ivf</strong> bitstream here</p>
-      <p class="hint">Supports H.264 (AVC) / H.265 (HEVC) / H.266 (VVC) / AV1 / VP9 video, MP4/MOV/WebM/IVF containers, and HEIC/AVIF/JPEG/PNG images (auto detect).</p>
+      <p>Drop a <strong>.h264 / .h265 / .h266 / .mp4 / .mov / .webm / .ivf / .yuv</strong> bitstream here</p>
+      <p class="hint">Supports H.264 (AVC) / H.265 (HEVC) / H.266 (VVC) / AV1 / VP9 video, MP4/MOV/WebM/IVF containers, raw YUV (auto-guess + custom resolution/format), and HEIC/AVIF/JPEG/PNG images (auto detect).</p>
     </div>
   </div>
 
   <section id="statsBar" class="stats-bar hidden"></section>
+
+  <section id="yuvSettingsPanel" class="yuv-settings hidden">
+    <span class="yuv-settings-title">YUV Settings</span>
+    <label>Width <input id="yuvWidth" type="number" min="2" step="2"></label>
+    <label>Height <input id="yuvHeight" type="number" min="2" step="2"></label>
+    <label>Format
+      <select id="yuvFormat" class="filter">
+        <option value="i420">YUV420p (I420)</option>
+        <option value="yv12">YV12</option>
+        <option value="nv12">NV12</option>
+        <option value="nv21">NV21</option>
+        <option value="yuv422p">YUV422p</option>
+        <option value="yuyv">YUYV (YUY2)</option>
+        <option value="uyvy">UYVY</option>
+        <option value="yuv444p">YUV444p</option>
+      </select>
+    </label>
+    <label>FPS <input id="yuvFps" type="number" min="1" step="any" value="30"></label>
+    <label>Color Matrix
+      <select id="yuvMatrix" class="filter">
+        <option value="bt601">BT.601</option>
+        <option value="bt709">BT.709</option>
+      </select>
+    </label>
+    <button id="yuvApplyBtn" class="btn btn-small">Apply</button>
+    <span id="yuvGuess" class="legend"></span>
+  </section>
 
   <section id="timelinePanel" class="timeline-panel hidden">
     <div class="panel-title">Frame Structure (Slice Timeline) <span id="timelineLegend" class="legend"></span></div>
@@ -144,6 +171,7 @@
           <li>Open or drag-and-drop a <b>.h264 / .h265 / .h266 / .mp4 / .mov / .webm / .ivf / .av1 / .obu</b> file, or an image <b>.heic / .avif / .jpg / .png / .gif / .webp</b>.</li>
           <li><b>NAL / OBU Unit List</b> — click a unit to inspect its syntax tree, Hex bytes, and locate the frame on the timeline.</li>
           <li><b>Frame Structure</b> — timeline of slices colored by type (I=red, P=blue, B=green). Click a frame to preview; use <b>Zoom +/-</b> to resize, <b>⏮/⏭</b> to step frame by frame.</li>
+          <li><b>Raw YUV</b> — dimensions/format are auto-guessed from file size (no header); adjust Width/Height/Format/FPS/Color Matrix in the <b>YUV Settings</b> bar and click Apply to re-parse. Preview supports BT.601/BT.709.</li>
           <li><b>Syntax / Preview / Hex</b> tabs — switch between parsed element tree, decoded video preview, and raw bytes.</li>
           <li><b>Play</b> — play decoded frames (rate follows the bitstream FPS when available), with progress highlight on the timeline.</li>
           <li><b>MediaInfo</b> tab — container-level metadata (format, duration, bitrate, tracks).</li>
@@ -154,6 +182,7 @@
           <li>Video codecs: H.264 (AVC), H.265 (HEVC), H.266 (VVC), AV1, VP9</li>
           <li>Containers: MP4 / M4V / MOV / WebM / IVF (auto-demux)</li>
           <li>Images: HEIC / HEIF, AVIF, JPEG (EXIF), PNG, GIF, WebP, BMP</li>
+          <li>Raw YUV: 8-bit planar (I420/YV12/YUV422p/YUV444p) and packed (NV12/NV21/YUYV/UYVY)</li>
           <li>Video decode: WebCodecs (H.264/H.265/VP9) + vvdec WASM (H.266) + dav1d WASM (AV1)</li>
           <li>Image decode: libheif WASM (HEIC) + dav1d WASM (AVIF) + browser-native (JPEG/PNG/…)</li>
         </ul>
@@ -163,6 +192,7 @@
 
   <script src="hevc.js"></script>
   <script src="js/demux.js"></script>
+  <script src="js/yuv.js"></script>
   <script src="js/jpeg.js"></script>
   <script src="js/plugin.js"></script>
   <script src="js/app.js"></script>

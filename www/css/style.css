@@ -111,6 +111,18 @@ body { display: flex; flex-direction: column; }
 .stat .label { color: var(--text-dim); }
 .stat .value { font-weight: 600; color: #fff; }
 
+.yuv-settings {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  padding: 8px 16px; background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border); flex: 0 0 auto;
+}
+.yuv-settings-title { font-weight: 600; color: var(--accent); }
+.yuv-settings label { display: flex; align-items: center; gap: 4px; color: var(--text-dim); white-space: nowrap; }
+.yuv-settings input[type="number"] {
+  width: 70px; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; font-size: 12px;
+}
+
 .timeline-panel { flex: 0 0 auto; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
 .timeline-wrap { padding: 6px 12px 10px; overflow-x: auto; }
 .timeline-wrap::-webkit-scrollbar { height: 8px; }
