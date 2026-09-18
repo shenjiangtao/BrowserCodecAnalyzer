@@ -50,12 +50,13 @@ var YuvParser = (function () {
     }
     if (candidates.length === 0) return null;
 
-    // 排序：常用格式优先（i420/nv12 → packed yuyv/uyvy）；
-    // order 作最终 tiebreaker（不依赖引擎 sort 稳定性）
+    // 排序：nv12 优先（相机/ADAS 采集标准，参考工具默认），
+    // 其次 i420、packed yuyv/uyvy；order 作最终 tiebreaker
     function score(c) {
-      var fmtRank = (c.format === "i420" || c.format === "nv12") ? 0 :
-                    (c.format === "yuyv" || c.format === "uyvy") ? 1 :
-                    (c.format === "yv12" || c.format === "nv21") ? 2 : 3;
+      var fmtRank = (c.format === "nv12") ? 0 :
+                    (c.format === "i420") ? 1 :
+                    (c.format === "yuyv" || c.format === "uyvy") ? 2 :
+                    (c.format === "yv12" || c.format === "nv21") ? 3 : 4;
       var resRank = COMMON_RESOLUTIONS.findIndex(function (res) { return res[0] === c.width && res[1] === c.height; });
       return [fmtRank, resRank < 0 ? 999 : resRank, c.order];
     }

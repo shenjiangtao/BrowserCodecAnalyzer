@@ -599,7 +599,14 @@
         applyYuvSettings();
         return;
       }
-      if (!previewView.classList.contains("hidden") && selectedSlice >= 0) drawYuvFrame(frameIndexOfSlice(selectedSlice));
+      if (!previewView.classList.contains("hidden")) {
+        if (currentData.isYuv) {
+          // 单帧模式：加载后 selectedSlice 为 -1，始终重绘（无选中时取帧 0）
+          drawYuvFrame(selectedSlice >= 0 ? Math.max(0, frameIndexOfSlice(selectedSlice)) : 0);
+        } else if (selectedSlice >= 0) {
+          drawYuvFrame(frameIndexOfSlice(selectedSlice));
+        }
+      }
       if (!mediaInfoView.classList.contains("hidden")) { renderMediaInfo(); }
     }
   }
