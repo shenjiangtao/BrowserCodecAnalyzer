@@ -788,6 +788,10 @@
     var nal = currentData.nalus[index];
     if (!fileBytes || nal.length <= 0) { hexView.textContent = "No data"; return; }
     var end = Math.min(nal.offset + nal.length, fileBytes.length);
+    // 截断上限：YUV 帧的 length 为整个帧大小（可达数十 MB），全量渲染 HTML 会卡死页面
+    var HEX_MAX_BYTES = 4096;
+    var truncated = (end - nal.offset) > HEX_MAX_BYTES;
+    if (truncated) end = nal.offset + HEX_MAX_BYTES;
     var out = "";
     for (var i = nal.offset; i < end; i += 16) {
       var lineHex = "", lineAscii = "";
@@ -804,6 +808,7 @@
              '<span class="hex-byte">' + lineHex + "</span>" +
              '<span class="hex-ascii">|' + lineAscii + "|</span>\n";
     }
+    if (truncated) out += "... (truncated: showing first " + HEX_MAX_BYTES + " of " + nal.length + " bytes)\n";
     hexView.innerHTML = out;
   }
 
@@ -1051,7 +1056,6 @@
     timeline.style.height = h + "px";
     timeline.width = w * dpr;
     timeline.height = h * dpr;
-    console.log('[Timeline] Total width:', w, 'clientWidth:', timeline.parentNode.clientWidth, 'scrollWidth:', timeline.parentNode.scrollWidth, 'zoom:', timelineZoom);
     var ctx = timeline.getContext("2d");
     var colors = { 2: "#E02020", 0: "#4d94e8", 1: "#00B050" };
     var barTop = labelH;
@@ -1198,7 +1202,6 @@
     var rect = timeline.getBoundingClientRect();
     var x = e.clientX - rect.left;
     var idx = sliceAtX(x);
-    console.log('[TimelineMove] clientX:', e.clientX, 'rect.left:', rect.left, 'x:', x, 'idx:', idx);
     if (idx < 0 || idx >= timeline._slices.length) { timelineTip().style.display = "none"; return; }
     var s = timeline._slices[idx];
     var t = { 2: "I", 0: "P", 1: "B" }[s.type] || "?";
@@ -2795,7 +2798,7 @@ timeline.addEventListener("click", function (e) {
             currentData.tiles = heic.tiles || null;
           }
         }
-        computeFrames();
+computeFrames();
 
         // YUV：显示设置面板（填充当前猜测值）
         var yuvSettingsPanel = document.getElementById("yuvSettingsPanel");
