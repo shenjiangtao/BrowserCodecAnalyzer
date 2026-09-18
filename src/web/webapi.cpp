@@ -3,6 +3,7 @@
 #include "AvcWebParser.h"
 #include "VvcWebParser.h"
 #include "CodecDetector.h"
+#include "YuvConvert.h"
 
 #include <HevcParser.h>
 #include <AvcParser.h>
@@ -199,6 +200,19 @@ extern "C"
   HEVC_KEEPALIVE void hevc_free(void *ptr)
   {
     free(ptr);
+  }
+
+  // ---------- YUV raw ----------
+  // 色彩平面 → RGBA 转换（WASM）。planes 按前端 getFrame 布局（独立 u/v 平面）。
+  // format: 0=i420, 1=yv12, 2=nv12, 3=nv21, 4=yuv422p, 5=yuyv, 6=uyvy, 7=yuv444p
+  // matrix: 0=bt601, 1=bt709；fullRange: 0/1
+  HEVC_KEEPALIVE uint8_t *yuv_convert_planes(const uint8_t *y, std::size_t yLen,
+                                              const uint8_t *u, std::size_t uLen,
+                                              const uint8_t *v, std::size_t vLen,
+                                              int width, int height, int format,
+                                              int matrix, int fullRange)
+  {
+    return yuv::convertPlanes(y, u, v, yLen, uLen, vLen, width, height, format, matrix, fullRange);
   }
 
 }

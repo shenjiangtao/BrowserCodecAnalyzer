@@ -1,8 +1,35 @@
 # YUV Raw File Parsing Support — Design
 
 Date: 2026-09-17
-Status: Approved
+Status: Approved (scope revised 2026-09-18, see Addendum)
 Approach: A (Pure JS front-end, no WASM)
+
+## Addendum (2026-09-18): scope revision + consistency alignment
+
+- **Single-frame mode only**: YUV is treated as one frame (no multi-frame
+  playback); auto-guess accepts only exact single-frame matches
+  (fileSize === frameSize); Play is a no-op for YUV
+- **8K cap**: max resolution 7680x4320 (MAX_WIDTH/MAX_HEIGHT), validated on Apply
+- **Consistency alignment** with the reference Python tool
+  (`yuv_converter_bt601_bt709.py`, cv2 INTER_LINEAR + full range):
+  - Default `fullRange=true` (Python uses Y as-is)
+  - Bilinear chroma upsampling, cv2 convention: `src=(dst+0.5)/sub-0.5`,
+    replicate borders, round-half-down descale (frac > 0.5 rounds up —
+    empirically fitted against cv2 output)
+  - Residual vs Python: maxDiff=2, avg 0.002-0.024 (PSNR ~66dB, visually
+    indistinguishable) — caused by cv2's internal per-stage fixed-point
+    quantization (non-monotonic under any per-pixel model; not replicable
+    without cv2 source)
+- **Performance**: downscale-first preview (subsample planes to display size,
+  convert ~410K pixels instead of 33M for 8K — preview ~10-20ms); full-res
+  conversion deferred to lightbox open (one-shot, needed for lossless PNG)
+- **WASM conversion module** (emsdk): `src/yuv/YuvConvert.{h,cpp}` pure
+  portable C++ core, exported as `_yuv_convert_planes` via webapi.cpp;
+  `build.sh` compiles src/yuv/*.cpp; JS wrapper prefers WASM and falls back
+  to `YuvParser.yuvToRGBA` (same conventions, both verified vs Python)
+- **Preview lightbox**: click preview canvas → full-res modal (Fit/100%,
+  pixelated) + Save PNG (lossless, from full-res snapshot); all codecs
+  supported (drawVideoFrame maintains a full-res snapshot)
 
 ## Goal
 

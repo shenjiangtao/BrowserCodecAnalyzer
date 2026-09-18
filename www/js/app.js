@@ -247,7 +247,7 @@
         { n: "Frame index: 0 .. " + (yu.frames - 1) + " (timestamp = index / fps)" },
         { n: "Color space: YUV" },
         { n: "Color matrix: " + (yu.colorMatrix === "bt709" ? "BT.709" : "BT.601") },
-        { n: "Color range: " + (yu.fullRange ? "Full" : "Limited (assumed)") }
+        { n: "Color range: " + (yu.fullRange ? "Full (assumed)" : "Limited") }
       ];
       if (yu.frames > 0) yVideoChildren.push({ n: "Bit rate: " + fmtBitrate(fileBytes.length * 8 * yu.fps / yu.frames) });
       var yRoots = [
@@ -438,7 +438,7 @@
     return {
       codec: "yuv",
       isYuv: true,
-      yuv: { width: width, height: height, format: format, formatName: fmt.name, arrangement: fmt.arrangement, fps: fps, frameSize: frameSize, frames: 1, colorMatrix: matrix, fullRange: false, mtime: mtime },
+      yuv: { width: width, height: height, format: format, formatName: fmt.name, arrangement: fmt.arrangement, fps: fps, frameSize: frameSize, frames: 1, colorMatrix: matrix, fullRange: true, mtime: mtime },
       nalus: nalus,
       streamInfo: { nalus: 1, slices: 1, i: 1, p: 0, b: 0, profile: "Raw YUV", level: "-", picWidth: width, picHeight: height, fps: String(fps) },
       hdr: { picWidth: width, picHeight: height },
@@ -456,6 +456,32 @@
     }
     return currentFullFrame;
   }
+  // YUV 转换：优先 WASM（Module._yuv_convert_planes，emsdk 编译），否则 JS fallback
+  function yuvConvertPlanes(dw, dh, format, planes, matrix, fullRange) {
+    if (typeof Module !== "undefined" && Module && Module._yuv_convert_planes) {
+      var idx = YuvParser.FORMAT_ORDER.indexOf(format);
+      if (idx >= 0) {
+        var fmt = YuvParser.FORMATS[format];
+        var cw = Math.floor(dw / fmt.sub[0]), ch = Math.floor(dh / fmt.sub[1]);
+        var yLen = dw * dh, cLen = cw * ch;
+        var py = Module._malloc(yLen), pu = Module._malloc(cLen), pv = Module._malloc(cLen);
+        Module.HEAPU8.set(planes.y, py);
+        Module.HEAPU8.set(planes.u, pu);
+        Module.HEAPU8.set(planes.v, pv);
+        var outPtr = Module._yuv_convert_planes(py, yLen, pu, cLen, pv, cLen, dw, dh, idx, matrix === "bt709" ? 1 : 0, fullRange ? 1 : 0);
+        Module._free(py);
+        Module._free(pu);
+        Module._free(pv);
+        if (outPtr) {
+          var out = new Uint8ClampedArray(Module.HEAPU8.subarray(outPtr, outPtr + yLen * 4));
+          Module._hevc_free(outPtr);
+          return out;
+        }
+      }
+    }
+    return YuvParser.yuvToRGBA(dw, dh, format, planes, matrix, fullRange);
+  }
+
   function drawYuvFrame(frameIndex) {
     if (!currentData || !currentData.isYuv || !fileBytes) return;
     var yu = currentData.yuv;
@@ -463,24 +489,40 @@
     if (frameIndex < 0 || frameIndex >= yu.frames) return;
     var planes = YuvParser.getFrame(fileBytes, frameIndex * frameSize, yu.width, yu.height, yu.format);
     if (!planes) { previewMsg.textContent = "Frame data out of range"; return; }
-    var rgba = YuvParser.yuvToRGBA(yu.width, yu.height, yu.format, planes, yu.colorMatrix, yu.fullRange);
-    var full = ensureFullFrame(yu.width, yu.height);
-    var fctx = full.getContext("2d");
-    fctx.putImageData(new ImageData(rgba, yu.width, yu.height), 0, 0);
-    previewCanvasTouched = true;
+    // 降采样优先：先抽样平面再按显示尺寸转换（8K 预览 ~80x 工作量削减）
     var c = previewCanvas;
     var w = yu.width, h = yu.height;
     var maxW = previewView.clientWidth - 32;
     var maxH = 480;
     if (maxW < 160) maxW = 160;
     var scale = Math.min(1, maxW / w, maxH / h);
-    c.width = Math.max(1, Math.round(w * scale));
-    c.height = Math.max(1, Math.round(h * scale));
+    var dw = Math.max(1, Math.round(w * scale)), dh = Math.max(1, Math.round(h * scale));
+    var small = (scale < 1) ? YuvParser.subsamplePlanes(planes, w, h, yu.format, dw, dh) : planes;
+    var rgba = yuvConvertPlanes(dw, dh, yu.format, small, yu.colorMatrix, yu.fullRange);
+    c.width = dw;
+    c.height = dh;
+    previewCanvasTouched = true;
     var ctx = c.getContext("2d");
-    ctx.drawImage(full, 0, 0, c.width, c.height);
+    ctx.putImageData(new ImageData(rgba, dw, dh), 0, 0);
+    // 全分辨率转换延迟到放大查看时（openFrameModal 按需构建）
+    currentFullFrame = null;
     var ts = (frameIndex / yu.fps).toFixed(3);
     previewHint.textContent = "Frame " + frameIndex + " / POC " + frameIndex + " · " + ts + "s" + (yu.mtime ? " · captured " + yu.mtime : "");
     previewMsg.textContent = "";
+  }
+
+  // YUV 全分辨率帧构建（lightbox 打开时按需调用，供无损 PNG 导出）
+  function buildFullYuvFrame() {
+    if (!currentData || !currentData.isYuv || !fileBytes) return;
+    var yu = currentData.yuv;
+    if (!yu || yu.frames <= 0 || !yu.width) return;
+    var frameIndex = frameIndexOfSlice(selectedSlice);
+    if (frameIndex < 0) frameIndex = 0;
+    var planes = YuvParser.getFrame(fileBytes, frameIndex * yu.frameSize, yu.width, yu.height, yu.format);
+    if (!planes) return;
+    var rgba = yuvConvertPlanes(yu.width, yu.height, yu.format, planes, yu.colorMatrix, yu.fullRange);
+    var full = ensureFullFrame(yu.width, yu.height);
+    full.getContext("2d").putImageData(new ImageData(rgba, yu.width, yu.height), 0, 0);
   }
 
 // YUV 设置面板：显示并填充当前值
@@ -576,6 +618,7 @@
   var frameModalClose = document.getElementById("frameModalClose");
 
   function openFrameModal() {
+    if (currentData && currentData.isYuv && !currentFullFrame) buildFullYuvFrame();
     if (!currentFullFrame || !currentFullFrame.width) return;
     frameModalTitle.textContent = "Frame Preview — " + currentFullFrame.width + " x " + currentFullFrame.height +
       (currentData && currentData.isYuv && currentData.yuv ? " · " + currentData.yuv.formatName : "");
@@ -2287,7 +2330,7 @@ timeline.addEventListener("click", function (e) {
       row("Frame size", fmtSize(yu.frameSize));
       row("Frames", yu.frames);
       row("Color matrix", yu.colorMatrix === "bt709" ? "BT.709" : "BT.601");
-      row("Color range", yu.fullRange ? "Full" : "Limited (assumed)");
+      row("Color range", yu.fullRange ? "Full (assumed)" : "Limited");
       if (yu.mtime) row("Capture time (file mtime)", yu.mtime);
       row("Additional metadata (SEI-like)", "no data source — sensor/GPS/IMU placeholder");
       return;
@@ -2556,7 +2599,7 @@ timeline.addEventListener("click", function (e) {
             result = {
               codec: "yuv",
               data: {
-                codec: "yuv", isYuv: true, yuv: { width: 0, height: 0, format: gf, formatName: YuvParser.FORMATS[gf].name, fps: gfps, frameSize: 0, frames: 0, colorMatrix: gmatrix, fullRange: false, mtime: mtime },
+                codec: "yuv", isYuv: true, yuv: { width: 0, height: 0, format: gf, formatName: YuvParser.FORMATS[gf].name, fps: gfps, frameSize: 0, frames: 0, colorMatrix: gmatrix, fullRange: true, mtime: mtime },
                 nalus: [], streamInfo: { nalus: 0, slices: 0, i: 0, p: 0, b: 0, profile: "Raw YUV", level: "-" }, hdr: {}, warnings: []
               }
             };
