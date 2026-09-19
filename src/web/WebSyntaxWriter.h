@@ -14,6 +14,8 @@
 namespace web
 {
 
+  std::string hevcSeiPayloadTypeName(std::size_t payloadType);
+
   class SyntaxWriter
   {
     public:

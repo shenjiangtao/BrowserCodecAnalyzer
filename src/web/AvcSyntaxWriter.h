@@ -9,11 +9,18 @@
 #include <memory>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace web
 {
 
   std::string avcNalTypeName(AVC::NALUnitType type);
+
+  std::string seiPayloadTypeName(uint32_t payloadType);
+  // 定制时间戳 SEI：payload 为 ASCII "%lu %ld"（帧号 + 时间戳）
+  bool seiCustomTimestamp(const std::vector<uint8_t> &data, unsigned long &frame, long long &ts);
+  // payload ASCII 可打印内容（用于 user_data_* SEI）
+  std::string seiAsciiText(const std::vector<uint8_t> &data);
 
   class AvcSyntaxWriter
   {

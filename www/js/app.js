@@ -419,7 +419,19 @@
       }
       n.frameIdx = frames.length - 1;
     }
-    return { slices: slices, frames: frames };
+    // 定制时间戳 SEI → 紧随其后的 slice 所属帧（供时间轴 tooltip / 预览提示显示）
+    var frameTsByFrame = {};
+    for (var k = 0; k < nalus.length; k++) {
+      if (nalus[k].frameTs === undefined || nalus[k].frameTs === null) continue;
+      for (var m = k + 1; m < nalus.length; m++) {
+        if (nalus[m].sliceType >= 0) {
+          var tfi = nalus[m].frameIdx;
+          if (tfi >= 0 && frameTsByFrame[tfi] === undefined) frameTsByFrame[tfi] = nalus[k].frameTs;
+          break;
+        }
+      }
+    }
+    return { slices: slices, frames: frames, frameTsByFrame: frameTsByFrame };
   }
 
   // ---------- YUV raw 支持（单帧模式，8K 上限） ----------
@@ -991,6 +1003,7 @@
     if (slices.length === 0) return;
     var frames = cf.frames;
     timeline._frames = frames;
+    timeline._frameTsByFrame = cf.frameTsByFrame || {};
 
     // 预计算关键帧索引（用于 findKeyFrame 二分查找，避免 seek 时线性扫描）
     var keyFrames = [];
@@ -1210,6 +1223,9 @@
     var tip = "Frame " + frameLabel + "  [" + t + "]\nPOC " + s.poc;
     if (currentData && currentData.isYuv && fi >= 0 && currentData.yuv) {
       tip += "\nTimestamp " + (fi / currentData.yuv.fps).toFixed(3) + "s";
+    }
+    if (currentData && !currentData.isYuv && timeline._frameTsByFrame && fi >= 0 && timeline._frameTsByFrame[fi] !== undefined) {
+      tip += "\nTimestamp " + timeline._frameTsByFrame[fi] + " (SEI)";
     }
     timelineTip().textContent = tip;
     timelineTip().style.display = "block";
@@ -1561,12 +1577,18 @@ timeline.addEventListener("click", function (e) {
     selectedSlice = sliceIndex;
   }
 
+  function frameTsSuffix(frameIndex) {
+    var m = timeline._frameTsByFrame;
+    if (!m || m[frameIndex] === undefined) return "";
+    return " · ts=" + m[frameIndex] + " (SEI)";
+  }
+
   function showPlayFrame(frameIndex) {
     var frame = play.frames[frameIndex];
     var f = timeline._frames[frameIndex];
     if (frame) {
       drawVideoFrame(frame);
-      previewHint.textContent = "Frame " + (f ? f.frameNum : frameIndex) + " / POC " + (f ? f.poc : frameIndex);
+      previewHint.textContent = "Frame " + (f ? f.frameNum : frameIndex) + " / POC " + (f ? f.poc : frameIndex) + frameTsSuffix(frameIndex);
     }
     if (f) {
       updatePlayProgress(f.first);
@@ -2299,7 +2321,7 @@ timeline.addEventListener("click", function (e) {
     var needReset = (play.feedFrame > fi);
 
     var pf = frames[fi];
-    previewHint.textContent = "Decoding... (POC " + (pf ? pf.poc : "?") + ")";
+    previewHint.textContent = "Decoding... (POC " + (pf ? pf.poc : "?") + ")" + frameTsSuffix(fi);
     previewMsg.textContent = "";
 
     initPlayDecoder(function () {
@@ -2537,6 +2559,7 @@ timeline.addEventListener("click", function (e) {
     playProgress = { start: -1, end: -1 };
 
     timeline._frames = null;
+    timeline._frameTsByFrame = null;
     timeline._slices = null;
     timeline._nalToSlice = null;
     timeline._keyFrames = null;

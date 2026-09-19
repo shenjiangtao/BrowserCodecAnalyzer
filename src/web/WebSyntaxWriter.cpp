@@ -1,5 +1,7 @@
 #include "WebSyntaxWriter.h"
 
+#include "AvcSyntaxWriter.h"
+
 #include <HevcUtils.h>
 
 #include <algorithm>
@@ -722,14 +724,56 @@ namespace web
     parent.add("pic_type = " + n(pAUD -> pic_type));
   }
 
+  std::string hevcSeiPayloadTypeName(std::size_t payloadType)
+  {
+    switch(payloadType)
+    {
+      case HEVC::SeiMessage::BUFFERING_PERIOD:                     return "buffering_period";
+      case HEVC::SeiMessage::PICTURE_TIMING:                       return "pic_timing";
+      case HEVC::SeiMessage::PAN_SCAN_RECT:                        return "pan_scan_rect";
+      case HEVC::SeiMessage::FILLER_PAYLOAD:                       return "filler_payload";
+      case HEVC::SeiMessage::USER_DATA_REGISTERED_ITU_T_T35:       return "user_data_registered_itu_t_t35";
+      case HEVC::SeiMessage::USER_DATA_UNREGISTERED:               return "user_data_unregistered";
+      case HEVC::SeiMessage::RECOVERY_POINT:                       return "recovery_point";
+      case HEVC::SeiMessage::SCENE_INFO:                           return "scene_info";
+      case HEVC::SeiMessage::FULL_FRAME_SNAPSHOT:                  return "full_frame_snapshot";
+      case HEVC::SeiMessage::PROGRESSIVE_REFINEMENT_SEGMENT_START: return "progressive_refinement_segment_start";
+      case HEVC::SeiMessage::PROGRESSIVE_REFINEMENT_SEGMENT_END:   return "progressive_refinement_segment_end";
+      case HEVC::SeiMessage::FILM_GRAIN_CHARACTERISTICS:           return "film_grain_characteristics";
+      case HEVC::SeiMessage::POST_FILTER_HINT:                     return "post_filter_hint";
+      case HEVC::SeiMessage::TONE_MAPPING_INFO:                    return "tone_mapping_info";
+      case HEVC::SeiMessage::FRAME_PACKING:                        return "frame_packing_arrangement";
+      case HEVC::SeiMessage::DISPLAY_ORIENTATION:                  return "display_orientation";
+      case HEVC::SeiMessage::SOP_DESCRIPTION:                      return "sop_description";
+      case HEVC::SeiMessage::ACTIVE_PARAMETER_SETS:                return "active_parameter_sets";
+      case HEVC::SeiMessage::DECODING_UNIT_INFO:                   return "decoding_unit_info";
+      case HEVC::SeiMessage::TEMPORAL_LEVEL0_INDEX:                return "temporal_level0_index";
+      case HEVC::SeiMessage::DECODED_PICTURE_HASH:                 return "decoded_picture_hash";
+      case HEVC::SeiMessage::SCALABLE_NESTING:                     return "scalable_nesting";
+      case HEVC::SeiMessage::REGION_REFRESH_INFO:                  return "region_refresh_info";
+      case HEVC::SeiMessage::NO_DISPLAY:                           return "no_display";
+      case HEVC::SeiMessage::TIME_CODE:                            return "time_code";
+      case HEVC::SeiMessage::MASTERING_DISPLAY_INFO:               return "mastering_display_colour_volume";
+      case HEVC::SeiMessage::SEGM_RECT_FRAME_PACKING:              return "segmented_rect_frame_packing";
+      case HEVC::SeiMessage::TEMP_MOTION_CONSTRAINED_TILE_SETS:    return "temp_motion_constrained_tile_sets";
+      case HEVC::SeiMessage::CHROMA_RESAMPLING_FILTER_HINT:        return "chroma_resampling_filter_hint";
+      case HEVC::SeiMessage::KNEE_FUNCTION_INFO:                   return "knee_function_info";
+      case HEVC::SeiMessage::COLOUR_REMAPPING_INFO:                return "colour_remapping_info";
+      case HEVC::SeiMessage::CONTENT_LIGHT_LEVEL_INFO:             return "content_light_level_info";
+      case HEVC::SeiMessage::ALTERNATIVE_TRANSFER_CHARACTERISTICS: return "alternative_transfer_characteristics";
+      default:                                                     return "unknown";
+    }
+  }
+
   void SyntaxWriter::createSEI(std::shared_ptr<HEVC::SEI> pSEI, SyntaxNode &parent)
   {
     for(std::size_t i = 0; i < pSEI -> sei_message.size(); i++)
     {
-      std::size_t payloadType = 0;
-      std::size_t payloadSize = 0;
+      // 先计算 payloadType/payloadSize，节点名附带类型名
+      std::size_t payloadType = 255 * pSEI -> sei_message[i].num_payload_type_ff_bytes + pSEI -> sei_message[i].last_payload_type_byte;
+      std::size_t payloadSize = 255 * pSEI -> sei_message[i].num_payload_size_ff_bytes + pSEI -> sei_message[i].last_payload_size_byte;
 
-      SyntaxNode &pitem = parent.add("sei_message(" + n(i) + ")");
+      SyntaxNode &pitem = parent.add("sei_message(" + n(i) + ") [" + hevcSeiPayloadTypeName(payloadType) + "]");
 
       if(pSEI -> sei_message[i].num_payload_type_ff_bytes)
       {
@@ -737,12 +781,10 @@ namespace web
         for(std::size_t k = 0; k < pSEI -> sei_message[i].num_payload_type_ff_bytes; k++)
         {
           pitemSecond.add("0xFF");
-          payloadType += 255;
         }
       }
 
       pitem.add("last_payload_type_byte = " + n(pSEI -> sei_message[i].last_payload_type_byte));
-      payloadType += pSEI -> sei_message[i].last_payload_type_byte;
 
       if(pSEI -> sei_message[i].num_payload_size_ff_bytes)
       {
@@ -750,12 +792,10 @@ namespace web
         for(std::size_t j = 0; j < pSEI -> sei_message[i].num_payload_size_ff_bytes; j++)
         {
           pitemSecond.add("0xFF");
-          payloadSize += 255;
         }
       }
 
       pitem.add("last_payload_size_byte = " + n(pSEI -> sei_message[i].last_payload_size_byte));
-      payloadSize += pSEI -> sei_message[i].last_payload_size_byte;
 
       switch(payloadType)
       {
@@ -1486,13 +1526,21 @@ namespace web
     }
     else
     {
+      // 统一：可打印 payload 按字符串显示（含定制时间戳等私有文本）
+      std::vector<uint8_t> payloadBytes(p->user_data_payload_byte.begin(), p->user_data_payload_byte.end());
+      std::string text = seiAsciiText(payloadBytes);
+      if(!text.empty())
+        parent.add("user_data_text = \"" + text + "\"");
+
       std::string str = "user_data_payload_byte = { ";
-      for(std::size_t i = 0; i < p->user_data_payload_byte.size(); i++)
+      for(std::size_t i = 0; i < p->user_data_payload_byte.size() && i < 64; i++)
       {
         if(i)
           str += ", ";
         str += n(p->user_data_payload_byte[i]);
       }
+      if(p->user_data_payload_byte.size() > 64)
+        str += ", ... (" + n((uint32_t)p->user_data_payload_byte.size()) + " bytes)";
       str += " }";
       parent.add(str);
     }

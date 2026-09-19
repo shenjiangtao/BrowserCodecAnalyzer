@@ -1,5 +1,7 @@
 #include "AvcSyntaxWriter.h"
 
+#include <sstream>
+
 namespace web
 {
 
@@ -37,6 +39,86 @@ namespace web
       case AVC::NAL_SLICE_EXT:    return "NAL_SLICE_EXT";
       default:                    return "NAL_UNSPEC";
     }
+  }
+
+  std::string seiPayloadTypeName(uint32_t payloadType)
+  {
+    switch(payloadType)
+    {
+      case 0:  return "buffering_period";
+      case 1:  return "pic_timing";
+      case 2:  return "pan_scan_rect";
+      case 3:  return "filler_payload";
+      case 4:  return "user_data_registered_itu_t_t35";
+      case 5:  return "user_data_unregistered";
+      case 6:  return "recovery_point";
+      case 7:  return "dec_ref_pic_marking_repetition";
+      case 8:  return "sps_pps_activity";
+      case 45: return "frame_packing_arrangement";
+      case 47: return "display_orientation";
+      default:
+      {
+        std::stringstream ss;
+        ss << payloadType << " (unknown)";
+        return ss.str();
+      }
+    }
+  }
+
+  bool seiCustomTimestamp(const std::vector<uint8_t> &data, unsigned long &frame, long long &ts)
+  {
+    std::size_t i = 0;
+    while(i < data.size() && (data[i] == ' ' || data[i] == '\t'))
+      i++;
+    if(i >= data.size() || data[i] < '0' || data[i] > '9')
+      return false;
+    unsigned long f = 0;
+    while(i < data.size() && data[i] >= '0' && data[i] <= '9')
+    {
+      f = f * 10 + (unsigned long)(data[i] - '0');
+      i++;
+    }
+    if(i >= data.size() || (data[i] != ' ' && data[i] != '\t'))
+      return false;
+    i++;
+    bool neg = false;
+    if(i < data.size() && (data[i] == '-' || data[i] == '+'))
+    {
+      neg = (data[i] == '-');
+      i++;
+    }
+    if(i >= data.size() || data[i] < '0' || data[i] > '9')
+      return false;
+    long long t = 0;
+    while(i < data.size() && data[i] >= '0' && data[i] <= '9')
+    {
+      t = t * 10 + (long long)(data[i] - '0');
+      i++;
+    }
+    if(neg)
+      t = -t;
+    frame = f;
+    ts = t;
+    return true;
+  }
+
+  std::string seiAsciiText(const std::vector<uint8_t> &data)
+  {
+    if(data.empty())
+      return "";
+    std::size_t printable = 0;
+    for(std::size_t i = 0; i < data.size(); i++)
+    {
+      if(data[i] >= 32 && data[i] <= 126)
+        printable++;
+    }
+    if(printable * 2 < data.size())
+      return "";
+    std::string out;
+    out.reserve(data.size());
+    for(std::size_t i = 0; i < data.size() && i < 128; i++)
+      out += (data[i] >= 32 && data[i] <= 126) ? (char)data[i] : '.';
+    return out;
   }
 
   void AvcSyntaxWriter::setParameterSets(const std::map<uint32_t, std::shared_ptr<AVC::SPS_NAL> > &spsMap,
@@ -531,9 +613,15 @@ namespace web
     for(std::size_t i = 0; i < sei.messages.size(); i++)
     {
       const AVC::SeiMessage &m = sei.messages[i];
-      SyntaxNode &c = p.add("sei_message(" + n(i) + ")");
+      SyntaxNode &c = p.add("sei_message(" + n(i) + ") [" + seiPayloadTypeName(m.payload_type) + "]");
       c.add("payload_type = " + n(m.payload_type));
       c.add("payload_size = " + n(m.payload_size));
+      // 统一：可打印 payload 按字符串显示（含定制时间戳等私有文本）
+      {
+        std::string text = seiAsciiText(m.payload_data);
+        if(!text.empty())
+          c.add("payload_text = \"" + text + "\"");
+      }
       std::string str = "payload_data = { ";
       for(std::size_t j = 0; j < m.payload_data.size() && j < 64; j++)
       {

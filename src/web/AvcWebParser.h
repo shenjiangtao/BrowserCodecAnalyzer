@@ -40,10 +40,13 @@ namespace web
         int                         sliceQp;
         int                         slicePoc;
         int                         frameNum;
+        bool                        hasFrameTs;  // 定制时间戳 SEI（ASCII "frame ts"）
+        long long                   frameTs;
         std::shared_ptr<AVC::NALUnit> nal;
       };
 
       void fillPocAndRefs(NALUEntry &e, const AVC::Slice_NAL *p);
+      void fillSeiInfo(NALUEntry &e, const AVC::SEI_NAL *p);
 
       struct WarningEntry
       {

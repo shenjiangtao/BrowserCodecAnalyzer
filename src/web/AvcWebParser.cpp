@@ -133,6 +133,38 @@ namespace web
     e.slicePoc = poc;
   }
 
+  void AvcWebParser::fillSeiInfo(NALUEntry &e, const AVC::SEI_NAL *p)
+  {
+    std::string names;
+    std::string text;
+    unsigned long frame = 0;
+    long long ts = 0;
+    for(std::size_t i = 0; i < p->messages.size(); i++)
+    {
+      const AVC::SeiMessage &m = p->messages[i];
+      if(!names.empty())
+        names += ", ";
+      names += seiPayloadTypeName(m.payload_type);
+      // 统一：可打印 payload 按字符串显示（含定制时间戳等私有文本）
+      if(text.empty())
+      {
+        std::string t = seiAsciiText(m.payload_data);
+        if(!t.empty())
+          text = t;
+      }
+      // 定制时间戳提取（供每帧时间戳显示：tooltip/预览）
+      if(!e.hasFrameTs && seiCustomTimestamp(m.payload_data, frame, ts))
+      {
+        e.hasFrameTs = true;
+        e.frameTs = ts;
+      }
+    }
+    if(!names.empty())
+      e.info += " · " + names;
+    if(!text.empty())
+      e.info += " · \"" + text + "\"";
+  }
+
   void AvcWebParser::onNALUnit(std::shared_ptr<AVC::NALUnit> pNALUnit, const AVC::Parser::Info *pInfo)
   {
     NALUEntry e;
@@ -144,6 +176,8 @@ namespace web
     e.sliceQp = -1;
     e.slicePoc = -1;
     e.frameNum = -1;
+    e.hasFrameTs = false;
+    e.frameTs = 0;
     e.nal = pNALUnit;
 
     m_nalusNumber++;
@@ -256,9 +290,14 @@ namespace web
         break;
 
       case AVC::NAL_SEI:
+      {
+        std::shared_ptr<AVC::SEI_NAL> p = std::dynamic_pointer_cast<AVC::SEI_NAL>(pNALUnit);
         e.info = "Supplemental Enhancement Information";
         e.color = "#BCEE68";
+        if(p)
+          fillSeiInfo(e, p.get());
         break;
+      }
 
       default:
         break;
@@ -303,6 +342,8 @@ namespace web
       out += ",\"sliceQp\":" + std::to_string(m_nalus[i].sliceQp);
       out += ",\"slicePoc\":" + std::to_string(m_nalus[i].slicePoc);
       out += ",\"frameNum\":" + std::to_string(m_nalus[i].frameNum);
+      if(m_nalus[i].hasFrameTs)
+        out += ",\"frameTs\":" + std::to_string(m_nalus[i].frameTs);
       out += "}";
     }
     out += "]";

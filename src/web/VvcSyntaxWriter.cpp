@@ -1,5 +1,7 @@
 #include "VvcSyntaxWriter.h"
 
+#include "AvcSyntaxWriter.h"
+
 namespace web
 {
 
@@ -352,9 +354,13 @@ namespace web
     for(std::size_t i = 0; i < sei.messages.size(); i++)
     {
       const VVC::SeiMessage &m = sei.messages[i];
-      SyntaxNode &c = p.add("sei_message(" + n(i) + ")");
+      SyntaxNode &c = p.add("sei_message(" + n(i) + ") [" + seiPayloadTypeName(m.payload_type) + "]");
       c.add("payload_type = " + n(m.payload_type));
       c.add("payload_size = " + n(m.payload_size));
+      // 统一：可打印 payload 按字符串显示（含定制时间戳等私有文本）
+      std::string text = seiAsciiText(m.payload_data);
+      if(!text.empty())
+        c.add("payload_text = \"" + text + "\"");
     }
   }
 
