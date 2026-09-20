@@ -2484,11 +2484,6 @@ timeline.addEventListener("click", function (e) {
     if (row) syncSelectionFromNal(parseInt(row.dataset.index, 10), false);
   });
 
-  seiView.addEventListener("click", function (e) {
-    var row = e.target.closest("tr[data-nal]");
-    if (row) syncSelectionFromNal(parseInt(row.dataset.nal, 10), false);
-  });
-
   nalScroll.addEventListener("scroll", updateVisibleRows);
 
   warningFilter.addEventListener("change", renderWarnings);
@@ -2533,6 +2528,11 @@ timeline.addEventListener("click", function (e) {
   tabSei.addEventListener("click", function () { showTab("sei"); });
   tabBitrate.addEventListener("click", function () { showTab("bitrate"); });
   tabMediaInfo.addEventListener("click", function () { showTab("mediainfo"); });
+
+  seiView.addEventListener("click", function (e) {
+    var row = e.target.closest("tr[data-nal]");
+    if (row) syncSelectionFromNal(parseInt(row.dataset.nal, 10), false);
+  });
 
   previewPlayBtn.addEventListener("click", function () { startPlayback(); });
   previewPrevBtn.addEventListener("click", function () { stepFrame(-1); });
