@@ -344,6 +344,29 @@ namespace web
       out += ",\"frameNum\":" + std::to_string(m_nalus[i].frameNum);
       if(m_nalus[i].hasFrameTs)
         out += ",\"frameTs\":" + std::to_string(m_nalus[i].frameTs);
+      {
+        std::shared_ptr<AVC::SEI_NAL> psei = std::dynamic_pointer_cast<AVC::SEI_NAL>(m_nalus[i].nal);
+        if(psei && !psei->messages.empty())
+        {
+          out += ",\"sei\":[";
+          for(std::size_t k = 0; k < psei->messages.size(); k++)
+          {
+            const AVC::SeiMessage &msg = psei->messages[k];
+            if(k) out += ",";
+            out += "{\"pt\":" + std::to_string(msg.payload_type);
+            out += ",\"name\":\"" + jsonEscape(seiPayloadTypeName(msg.payload_type)) + "\"";
+            out += ",\"size\":" + std::to_string(msg.payload_size);
+            std::string text = seiAsciiText(msg.payload_data);
+            if(!text.empty())
+              out += ",\"text\":\"" + jsonEscape(text) + "\"";
+            unsigned long f; long long ts;
+            if(seiCustomTimestamp(msg.payload_data, f, ts))
+              out += ",\"frameTs\":" + std::to_string(ts);
+            out += "}";
+          }
+          out += "]";
+        }
+      }
       out += "}";
     }
     out += "]";

@@ -1,6 +1,7 @@
 #include "VvcWebParser.h"
 
 #include "VvcSyntaxWriter.h"
+#include "AvcSyntaxWriter.h"
 #include "ColorNames.h"
 #include "Json.h"
 
@@ -294,6 +295,26 @@ namespace web
       out += ",\"sliceQp\":" + std::to_string(m_nalus[i].sliceQp);
       out += ",\"slicePoc\":" + std::to_string(m_nalus[i].slicePoc);
       out += ",\"frameNum\":" + std::to_string(m_nalus[i].frameNum);
+      {
+        std::shared_ptr<VVC::SEI_NAL> psei = std::dynamic_pointer_cast<VVC::SEI_NAL>(m_nalus[i].nal);
+        if(psei && !psei->messages.empty())
+        {
+          out += ",\"sei\":[";
+          for(std::size_t k = 0; k < psei->messages.size(); k++)
+          {
+            const VVC::SeiMessage &msg = psei->messages[k];
+            if(k) out += ",";
+            out += "{\"pt\":" + std::to_string(msg.payload_type);
+            out += ",\"name\":\"" + jsonEscape(seiPayloadTypeName(msg.payload_type)) + "\"";
+            out += ",\"size\":" + std::to_string(msg.payload_size);
+            std::string text = seiAsciiText(msg.payload_data);
+            if(!text.empty())
+              out += ",\"text\":\"" + jsonEscape(text) + "\"";
+            out += "}";
+          }
+          out += "]";
+        }
+      }
       out += "}";
     }
     out += "]";

@@ -255,6 +255,15 @@ td.mono { font-family: "SF Mono", Menlo, Consolas, monospace; }
 .br-legend { display: inline-flex; align-items: center; gap: 4px; }
 .br-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
 
+.sei-view { flex: 1; overflow: auto; padding: 8px 12px; }
+.sei-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.sei-table th { text-align: left; padding: 4px 8px; color: var(--text-dim); font-weight: 600; border-bottom: 1px solid var(--border, rgba(255,255,255,.12)); white-space: nowrap; }
+.sei-table td { padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,.06); color: var(--text); vertical-align: top; }
+.sei-table tbody tr { cursor: pointer; }
+.sei-table tbody tr:hover { background: rgba(255,255,255,.05); }
+.sei-table .sei-text { max-width: 420px; word-break: break-all; color: #7ec8ff; }
+.sei-table .mono { font-family: "SF Mono", Menlo, Consolas, monospace; }
+
 .statusbar {
   flex: 0 0 auto; padding: 4px 16px; background: var(--header-bg);
   border-top: 1px solid var(--border); color: var(--text-dim); font-size: 12px;

@@ -2398,6 +2398,44 @@ timeline.addEventListener("click", function (e) {
     warningBody.appendChild(frag);
   }
 
+  // ---------- SEI tab：全部 SEI 消息列表（解码后） ----------
+  function renderSeiTab() {
+    if (!currentData || !seiView) { if (seiView) seiView.innerHTML = ""; return; }
+    var nalus = currentData.nalus || [];
+    var msgs = [];
+    for (var i = 0; i < nalus.length; i++) {
+      var n = nalus[i];
+      if (!n.sei || !n.sei.length) continue;
+      for (var k = 0; k < n.sei.length; k++) {
+        msgs.push({ nalIndex: i, offset: n.offset, msg: n.sei[k] });
+      }
+    }
+    if (msgs.length === 0) {
+      seiView.innerHTML = '<div class="legend" style="padding:12px">No SEI NAL units in this stream</div>';
+      return;
+    }
+    var html = '<div class="table-wrap"><table class="sei-table"><thead><tr>' +
+      "<th>NAL #</th><th>Offset</th><th>Payload Type</th><th>Size</th><th>Text / Content</th><th>Frame TS</th>" +
+      "</tr></thead><tbody>";
+    for (var j = 0; j < msgs.length; j++) {
+      var e = msgs[j], m = e.msg;
+      html += '<tr data-nal="' + e.nalIndex + '" title="Click to select NAL #' + e.nalIndex + '">';
+      html += '<td class="mono">' + e.nalIndex + "</td>";
+      html += '<td class="mono">' + hex8(e.offset) + "</td>";
+      html += "<td>" + escapeHtml(m.name || ("type " + m.pt)) + " <span class=\"mono\" style=\"opacity:.6\">(" + m.pt + ")</span></td>";
+      html += '<td class="mono">' + m.size + "</td>";
+      html += '<td class="mono sei-text">' + (m.text ? escapeHtml(m.text) : '<span style="opacity:.4">(binary)</span>') + "</td>";
+      html += '<td class="mono">' + (m.frameTs !== undefined && m.frameTs !== null ? m.frameTs : "") + "</td>";
+      html += "</tr>";
+    }
+    html += "</tbody></table></div>";
+    seiView.innerHTML = html;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, String.fromCharCode(38) + "amp;").replace(/</g, String.fromCharCode(38) + "lt;").replace(/>/g, String.fromCharCode(38) + "gt;").replace(/"/g, String.fromCharCode(38) + "quot;");
+  }
+
   function selectNal(index, scrollTo) {
     if (!currentData) return;
     selectedIndex = index;
@@ -2446,6 +2484,11 @@ timeline.addEventListener("click", function (e) {
     if (row) syncSelectionFromNal(parseInt(row.dataset.index, 10), false);
   });
 
+  seiView.addEventListener("click", function (e) {
+    var row = e.target.closest("tr[data-nal]");
+    if (row) syncSelectionFromNal(parseInt(row.dataset.nal, 10), false);
+  });
+
   nalScroll.addEventListener("scroll", updateVisibleRows);
 
   warningFilter.addEventListener("change", renderWarnings);
@@ -2454,18 +2497,22 @@ timeline.addEventListener("click", function (e) {
   var tabSyntax = document.getElementById("tabSyntax");
   var tabPreview = document.getElementById("tabPreview");
   var tabHex = document.getElementById("tabHex");
+  var tabSei = document.getElementById("tabSei");
   var tabBitrate = document.getElementById("tabBitrate");
   var tabMediaInfo = document.getElementById("tabMediaInfo");
+  var seiView = document.getElementById("seiView");
 
   function showTab(which) {
     tabSyntax.classList.toggle("active", which === "syntax");
     tabPreview.classList.toggle("active", which === "preview");
     tabHex.classList.toggle("active", which === "hex");
+    tabSei.classList.toggle("active", which === "sei");
     tabBitrate.classList.toggle("active", which === "bitrate");
     tabMediaInfo.classList.toggle("active", which === "mediainfo");
     syntaxTree.classList.toggle("hidden", which !== "syntax");
     previewView.classList.toggle("hidden", which !== "preview");
     hexView.classList.toggle("hidden", which !== "hex");
+    seiView.classList.toggle("hidden", which !== "sei");
     bitrateView.classList.toggle("hidden", which !== "bitrate");
     mediaInfoView.classList.toggle("hidden", which !== "mediainfo");
     if (which === "preview" && currentData) {
@@ -2473,6 +2520,7 @@ timeline.addEventListener("click", function (e) {
       if (selectedSlice >= 0) previewFrame(selectedSlice);
     }
     if (which === "bitrate" && currentData) renderBitrate();
+    if (which === "sei" && currentData) renderSeiTab();
     if (which === "mediainfo" && currentData && !mediaInfoView.dataset.rendered) {
       renderMediaInfo();
       mediaInfoView.dataset.rendered = "1";
@@ -2482,6 +2530,7 @@ timeline.addEventListener("click", function (e) {
   tabSyntax.addEventListener("click", function () { showTab("syntax"); });
   tabPreview.addEventListener("click", function () { showTab("preview"); });
   tabHex.addEventListener("click", function () { showTab("hex"); });
+  tabSei.addEventListener("click", function () { showTab("sei"); });
   tabBitrate.addEventListener("click", function () { showTab("bitrate"); });
   tabMediaInfo.addEventListener("click", function () { showTab("mediainfo"); });
 

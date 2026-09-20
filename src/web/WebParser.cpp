@@ -1,6 +1,7 @@
 #include "WebParser.h"
 
 #include "WebSyntaxWriter.h"
+#include "AvcSyntaxWriter.h"
 #include "Json.h"
 
 #include <limits>
@@ -447,6 +448,36 @@ namespace web
       out += std::to_string(m_nalus[i].firstSlice);
       out += ",\"frameNum\":";
       out += std::to_string(m_nalus[i].frameNum);
+      {
+        std::shared_ptr<HEVC::SEI> psei = std::dynamic_pointer_cast<HEVC::SEI>(m_nalus[i].nal);
+        if(psei && !psei->sei_message.empty())
+        {
+          out += ",\"sei\":[";
+          for(std::size_t k = 0; k < psei->sei_message.size(); k++)
+          {
+            const HEVC::SeiMessage &msg = psei->sei_message[k];
+            std::size_t pt = 255 * msg.num_payload_type_ff_bytes + msg.last_payload_type_byte;
+            std::size_t psz = 255 * msg.num_payload_size_ff_bytes + msg.last_payload_size_byte;
+            if(k) out += ",";
+            out += "{\"pt\":" + std::to_string(pt);
+            out += ",\"name\":\"" + jsonEscape(hevcSeiPayloadTypeName(pt)) + "\"";
+            out += ",\"size\":" + std::to_string(psz);
+            if(pt == HEVC::SeiMessage::USER_DATA_UNREGISTERED)
+            {
+              std::shared_ptr<HEVC::UserDataUnregistered> pud = std::dynamic_pointer_cast<HEVC::UserDataUnregistered>(msg.sei_payload);
+              if(pud)
+              {
+                std::vector<uint8_t> payloadBytes(pud->user_data_payload_byte.begin(), pud->user_data_payload_byte.end());
+                std::string text = seiAsciiText(payloadBytes);
+                if(!text.empty())
+                  out += ",\"text\":\"" + jsonEscape(text) + "\"";
+              }
+            }
+            out += "}";
+          }
+          out += "]";
+        }
+      }
       out += "}";
     }
     out += "]";
