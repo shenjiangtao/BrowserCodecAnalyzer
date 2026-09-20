@@ -1,0 +1,36 @@
+# GitLab CI/CD：构建 WASM + 前端资源，部署到 GitLab Pages
+# 用法：将本仓库推送到 GitLab 后，Settings → Pages 无需额外配置（pages job 自动部署）。
+# 页面地址：https://<user>.gitlab.io/<project>
+# 手动触发：CI/CD → Pipelines → Run pipeline（web source，见 rules）
+
+image: ubuntu:22.04
+
+pages:
+  stage: deploy
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq git python3 ca-certificates
+  script:
+    # 安装 emsdk（缓存加速后续流水线）
+    - |
+      if [ ! -x .cache/emsdk/upstream/emscripten/emcc ]; then
+        git clone --depth 1 https://github.com/emscripten-core/emsdk.git .cache/emsdk
+        cd .cache/emsdk && ./emsdk install latest && ./emsdk activate latest
+        cd "$CI_PROJECT_DIR"
+      fi
+    - export PATH="$CI_PROJECT_DIR/.cache/emsdk/upstream/emscripten:$PATH"
+    # 构建 dist/（与本地构建保持一致）
+    - ./build.sh
+    # GitLab Pages 要求产物位于 public/
+    - mkdir -p public
+    - cp -r dist/* public/
+  cache:
+    key: emsdk
+    paths:
+      - .cache/emsdk/
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: $CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "web"
