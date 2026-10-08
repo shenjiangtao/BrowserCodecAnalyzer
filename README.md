@@ -62,11 +62,10 @@ python3 -m http.server -d dist 8000
 # 打开 http://localhost:8000
 ```
 
-> **注意 / Note**: 请使用 `./build.sh` 构建 Web 版。
-> `make wasm` 当前未同步 `src/yuv/*.cpp` 与 `_yuv_convert_planes` 导出，
-> 产物缺少 YUV WASM 转换能力（CI 已改用 build.sh）。
-> Use `./build.sh` for the web build; the `make wasm` target is currently
-> out of sync (missing `src/yuv/*.cpp` and `_yuv_convert_planes`).
+> **注意 / Note**: `./build.sh` 为标准构建入口（CI 使用）；`make wasm` 与其
+> 参数一致，亦可使用。
+> `./build.sh` is the canonical web build (used by CI); `make wasm` builds
+> the same thing with identical flags.
 
 ### 原生命令行 / Native CLI
 
@@ -142,7 +141,7 @@ BrowserCodecAnalyzer/
 ├── docs/
 │   └── superpowers/specs/2026-09-17-yuv-parser-design.md  # YUV 设计文档
 ├── build.sh              # Web 构建脚本（标准入口）/ Web build script (canonical)
-├── Makefile              # 原生构建 / Native build（wasm 目标已过期）
+├── Makefile              # 统一构建 native + wasm / Unified build
 ├── .github/workflows/deploy.yml  # GitHub Pages CI
 ├── .gitlab-ci.yml        # GitLab Pages CI
 ├── USAGE_en.md           # 英文技术文档 / English technical documentation

@@ -142,7 +142,7 @@ make native
 |------|------|
 | `make` / `make all` | 默认构建 native |
 | `make native` | 构建原生可执行文件 `hevcparser_native` |
-| `make wasm` | 构建 Web 版本 — **当前与 build.sh 不同步**：缺少 `src/yuv/*.cpp` 与 `_yuv_convert_planes` 导出，产物无 YUV WASM 转换能力，请优先使用 `./build.sh` |
+| `make wasm` | 构建 Web 版本（源文件、include 路径与 emcc 参数与 `./build.sh` 一致） |
 | `make clean` | 清理所有构建产物 |
 
 ### 方式三：CI / Pages 自动部署
@@ -862,8 +862,8 @@ extern "C" {
 `_newcodec_parse`、`_newcodec_get_nal_syntax`、`_newcodec_reset` 加入
 `-s EXPORTED_FUNCTIONS`。
 
-**Makefile**：将新源文件加入 `NATIVE_SRC`（并同步 `wasm` 目标——注意
-`wasm` 目标当前缺少 `src/yuv/*.cpp`；请保持同步或直接依赖 build.sh）。
+**Makefile**：将新源文件加入 `NATIVE_SRC` 与 `wasm` 目标的源列表
+（两者需与 `build.sh` 保持同步）。
 
 #### 6. 更新 CodecDetector
 

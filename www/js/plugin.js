@@ -1,6 +1,6 @@
 // BrowserCodecAnalyzer 插件系统
 // 用户可通过 window.BrowserCodecAnalyzer.registerPlugin(...) 注册自定义 SEI 解析器。
-// 插件文件示例见 docs/sei-plugin.example.js
+// 插件文件示例见 www/plugins/example-sei.js
 
 (function () {
   "use strict";

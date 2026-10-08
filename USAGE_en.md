@@ -142,7 +142,7 @@ make native
 |--------|-------------|
 | `make` / `make all` | Default builds native |
 | `make native` | Build native executable `hevcparser_native` |
-| `make wasm` | Build web version — **currently out of sync**: missing `src/yuv/*.cpp` and the `_yuv_convert_planes` export, so the resulting build lacks the WASM YUV conversion. Prefer `./build.sh`. |
+| `make wasm` | Build web version (same sources, include paths and emcc flags as `./build.sh`) |
 | `make clean` | Clean all build artifacts |
 
 ### Method 3: CI / Pages Deployment
@@ -867,9 +867,8 @@ extern "C" {
 paths, and add `_newcodec_parse`, `_newcodec_get_nal_syntax`, `_newcodec_reset`
 to `-s EXPORTED_FUNCTIONS`.
 
-**Makefile**: add the new sources to `NATIVE_SRC` (and to the `wasm` target —
-note the `wasm` target is currently missing `src/yuv/*.cpp`; keep it in sync
-or rely on `build.sh`).
+**Makefile**: add the new sources to `NATIVE_SRC` and to the `wasm` target's
+source list (keep both in sync with `build.sh`).
 
 #### 6. Update CodecDetector
 
