@@ -24,9 +24,10 @@ BrowserCodecAnalyzer (project codename BrowserCodecAnalyzer) is a **bitstream an
 | Capability | Support Range |
 |------------|---------------|
 | **Video Coding Standards** | H.264/AVC, H.265/HEVC, H.266/VVC, AV1, VP9 |
-| **Container Formats** | MP4/M4V/MOV, WebM, IVF, MPEG-TS |
+| **Container Formats** | MP4/M4V/MOV (incl. fMP4), WebM, IVF, MPEG-TS |
 | **Image Formats** | HEIC/HEIF, AVIF, JPEG, PNG, GIF, WebP, BMP |
 | **Raw Bitstream Formats** | .h264, .h265, .h266, .264, .265, .266, .avc, .hevc, .vvc, .bin, .bit, .obu |
+| **Raw YUV** | 8-bit: I420, YV12, NV12, NV21, YUV422p, YUYV, UYVY, YUV444p (Web UI only) |
 | **Output Forms** | Web UI (WASM), Native CLI (C++) |
 
 ### Use Cases
@@ -120,7 +121,7 @@ em++ [source_files...] \
 |-----------|-------------|
 | `-s WASM=1` | Generate WebAssembly |
 | `-s ALLOW_MEMORY_GROWTH=1` | Allow dynamic memory growth, prevents OOM on large files |
-| `-s MODULARIZE=1` | Generate ES6 module, supports `import`/`await` |
+| `-s MODULARIZE=1` | Generate a module factory (global `createHevcModule`, also importable as ES module) |
 | `-s EXPORT_NAME=createHevcModule` | Exported module factory function name |
 | `EXPORTED_FUNCTIONS` | C functions exported for JS calls |
 
@@ -141,8 +142,17 @@ make native
 |--------|-------------|
 | `make` / `make all` | Default builds native |
 | `make native` | Build native executable `hevcparser_native` |
-| `make wasm` | Build web version (same as `./build.sh`) |
+| `make wasm` | Build web version — **currently out of sync**: missing `src/yuv/*.cpp` and the `_yuv_convert_planes` export, so the resulting build lacks the WASM YUV conversion. Prefer `./build.sh`. |
 | `make clean` | Clean all build artifacts |
+
+### Method 3: CI / Pages Deployment
+
+The repository ships two ready-to-use deployment pipelines, both running `./build.sh` and publishing `dist/`:
+
+| Platform | Config | Trigger |
+|----------|--------|---------|
+| **GitHub Pages** | `.github/workflows/deploy.yml` | Push to `main`/`master`, or manual dispatch |
+| **GitLab Pages** | `.gitlab-ci.yml` | Push to `main`/`master`, or manual pipeline run (page at `https://<user>.gitlab.io/<project>`) |
 
 ---
 
@@ -158,9 +168,11 @@ make native
 ├─────────────────────────────────────────────────────────────┤
 │ Stats Bar: Bitrate, FPS, Resolution, Profile, etc.           │
 ├─────────────────────────────────────────────────────────────┤
+│ YUV Settings Bar (only for .yuv files)                       │
+├─────────────────────────────────────────────────────────────┤
 │ Timeline Panel: Frame Structure Timeline (I=Red, P=Blue, B=Green) │
 ├─────────────────────────────────────────────────────────────┤
-│ NAL Unit List    │ Syntax / Preview / Hex / MediaInfo / Bitrate │
+│ NAL Unit List    │ Syntax / Preview / Hex / SEI / MediaInfo / Bitrate │
 │ (Left Panel)     │ (Right Panel, Tabbed)                       │
 ├──────────────────┴──────────────────────────────────────────┤
 │ Bottom Panels: HDR/Color Info | Warnings Table             │
@@ -181,23 +193,20 @@ make native
 
 | Column | Meaning | Interaction |
 |--------|---------|-------------|
-| Offset | File offset (bytes) | Click to copy offset |
+| Offset | File offset (bytes) | - |
 | Length | NAL unit length | - |
 | Type | NAL type name (VPS/SPS/PPS/IDR/Non-IDR/SEI/etc.) | Color-coded |
 | Frame | Frame number (POC) | - |
 | Info | Key syntax element summary | Hover for full details |
 
 **Operations**:
-- Click any row → Right panel shows full syntax tree for that NAL
+- Click any row → Right panel shows full syntax tree and Hex dump for that NAL
 - Scroll list → Auto-load visible rows (virtual scrolling, supports millions of NALs)
-- Double-click → Jump to corresponding frame on timeline
 
 #### 2. Syntax Tree Tab (Syntax)
 
 - **Tree Structure**: Hierarchical display of all syntax elements
 - **Expand/Collapse**: Click ▶/▼ icons
-- **Search**: `Ctrl+F` to find field names/values in syntax tree
-- **Copy**: Click row → Copy path/value/full line
 
 **Syntax Element Field Format**:
 ```
@@ -210,39 +219,64 @@ Example: pic_width_in_luma_samples: 1920 [compliant with Main 10 Profile]
 - **Video Decode Preview**: Click timeline frame → Decode and display frame
 - **Playback Controls**: ▶ Play, |◀ Prev Frame, ▶| Next Frame
 - **Order Toggle**: "Decode Order" ↔ "Display Order"
+- **Frame Lightbox**: Click the preview canvas → full-resolution modal with **Fit / 100%** zoom modes and **Save PNG** (lossless export of the current frame snapshot; available for all codecs and raw YUV)
 - **Supported Decoders**:
   - H.264/H.265/VP9 → Browser native WebCodecs
   - H.266/VVC → vvdec WASM (requires extra load)
   - AV1 → dav1d WASM (requires extra load)
+  - HEIC → libheif WASM; AVIF → dav1d WASM; JPEG/PNG/GIF/WebP/BMP → browser-native
 
 #### 4. Hex View Tab (Hex)
 
-- **Raw Bytes View**: Complete NAL unit in hex + ASCII
-- **Syntax Element Highlight**: Click syntax tree node → Hex view highlights corresponding byte range
+- **Raw Bytes View**: NAL unit in hex + ASCII
 - **Address Bar**: Shows absolute file offset
+- **Truncation**: Display is capped at the first 4 KB per NAL unit (raw YUV frames can be tens of MB; a notice is shown when truncated)
 
-#### 5. MediaInfo Tab
+#### 5. SEI Tab
 
-Container-level metadata (MP4/MOV/WebM/IVF only):
+Aggregated table of all SEI messages across the parsed stream (one row per SEI message):
+
+| Column | Meaning |
+|--------|---------|
+| NAL # | Index of the NAL unit carrying the message |
+| Offset | File offset of the NAL unit |
+| Payload Type | Type name (e.g., decoded picture hash) + numeric payloadType |
+| Size | Payload size in bytes |
+| Text / Content | Printable payload as text, `(binary)` if not textual |
+| Frame TS | Frame timestamp extracted from custom H.264 `"frame ts"` SEI (when present) |
+
+- Click a row → selects the corresponding NAL unit in the list (and shows its syntax tree)
+- Custom SEI payloads can be decoded via the SEI plugin system (see below)
+
+#### 6. MediaInfo Tab
+
+Container-level metadata (MP4/MOV/WebM/IVF):
 - Format, major brand, compatible brands
 - Duration, total bitrate
 - Track info: type, codec, resolution, frame rate, language
 
-#### 6. Bitrate Statistics Tab (Bitrate)
+For raw YUV files, this tab shows the raw YUV section: pixel arrangement,
+resolution, fps, frame count, frame size, file size, and duration (frames/fps),
+plus an "Additional Metadata (SEI-like)" placeholder section reserved for future
+sensor/GPS/IMU data sources.
 
-- **Frame-level Bitrate Chart**: Frame size over time
-- **Statistics**: Average bitrate, peak bitrate, I/P/B average frame size
-- **Export**: Download as CSV
+#### 7. Bitrate Statistics Tab (Bitrate)
 
-#### 7. Timeline Panel
+- **Frame-level Bitrate Chart**: Per-frame instantaneous bitrate bar chart, colored by frame type (I=red, P=blue, B=green)
+- **Statistics**: Frames, FPS, total size, average / peak / min bitrate (with frame index), I/P/B counts
+- **Interaction**: `+`/`−` buttons zoom the chart; hover a bar for per-frame details; the selected frame is highlighted
+
+#### 8. Timeline Panel
 
 - **Color Coding**: I-frame=Red, P-frame=Blue, B-frame=Green, IDR=Dark Red
-- **Zoom**: `+`/`-` keys or mouse wheel
-- **Pan**: Drag empty area
+- **Zoom**: `+` / `−` buttons on the panel
+- **Frame Step**: `|◀` / `▶|` buttons on the panel
 - **Click Frame**: Select and preview decoded frame
+- **Hover**: Tooltip with frame details (type, QP, size; for YUV: frame index and synthetic timestamp)
 - **Progress Indicator**: Highlights current playback position during play
+- **Long videos**: Zoom auto-fits; a minimum clickable frame width is enforced so long streams stay navigable
 
-#### 8. HDR/Color Info Panel (Bottom Left)
+#### 9. HDR/Color Info Panel (Bottom Left)
 
 | Item | Source | Example |
 |------|--------|---------|
@@ -253,7 +287,7 @@ Container-level metadata (MP4/MOV/WebM/IVF only):
 | Transfer Characteristics | VUI transfer_characteristics | PQ (SMPTE ST 2084) / HLG / BT.709 |
 | Color Primaries | VUI colour_primaries | BT.2020 / BT.709 / P3-D65 |
 
-#### 9. Warnings Panel (Bottom Right)
+#### 10. Warnings Panel (Bottom Right)
 
 | Level | Type | Description |
 |-------|------|-------------|
@@ -263,77 +297,115 @@ Container-level metadata (MP4/MOV/WebM/IVF only):
 
 **Filter**: Dropdown to select warning type (-1=All, 1=Out of range, 2=Ref structure, 3=Profile)
 
-### Complete Keyboard Shortcuts
+### UI Controls Reference
 
-| Shortcut | Function | Context |
-|----------|----------|---------|
-| `←` | Previous Frame | Global (when not focused on input) |
-| `→` | Next Frame | Global |
-| `+` / `=` | Timeline Zoom In | Timeline focused |
-| `-` / `_` | Timeline Zoom Out | Timeline focused |
-| `Space` | Play/Pause | Preview focused |
-| `D` | Toggle Decode/Display Order | Preview focused |
-| `Home` | Jump to First Frame | Timeline |
-| `End` | Jump to Last Frame | Timeline |
-| `Ctrl+F` | Search Syntax Tree | Syntax Tree Tab |
-| `Esc` | Close Modal/Cancel Selection | Global |
+All interactions are mouse-driven — the app defines **no keyboard shortcuts**.
+
+| Control | Location | Function |
+|---------|----------|----------|
+| `+` / `−` buttons | Timeline / Bitrate panels | Zoom in / out |
+| `\|◀` / `▶\|` buttons | Timeline panel | Previous / next frame |
+| ▶ Play / \|◀ Prev / ▶\| Next | Preview tab | Playback and frame stepping |
+| "Decode Order" toggle | Preview tab | Switch between decode order and display order |
+| Click preview canvas | Preview tab | Open full-resolution lightbox (Fit / 100%, Save PNG) |
+| Click NAL row | NAL list | Show syntax tree + hex for that NAL |
+| Click frame bar | Timeline | Select and preview frame |
+| Drag splitters | Between panels | Resize columns / rows |
+
+### Raw YUV Files (.yuv)
+
+Raw YUV carries no header — dimensions, format, and fps are guessed from the
+file size and can be overridden by the user. YUV support is **Web UI only** (the
+CLI handles H.264/HEVC/VVC bitstreams only).
+
+- **Auto-guess**: only exact single-frame matches are accepted
+  (`fileSize === frameSize`), ranked with NV12 first (camera/ADAS convention),
+  then I420, packed YUYV/UYVY. If no candidate matches, the settings panel opens
+  waiting for manual input.
+- **YUV Settings bar** (shown below the stats bar, YUV files only):
+  Width / Height number inputs, Format dropdown (8 arrangements: I420, YV12,
+  NV12, NV21, YUV422p, YUYV, UYVY, YUV444p), FPS (default 30), Color Matrix
+  (BT.601 / BT.709), Apply button → re-parse and refresh all views.
+- **Single-frame mode**: a `.yuv` file is treated as one frame; Play is a no-op
+  for YUV. Max resolution 7680×4320 (8K), validated on Apply.
+- **Color conversion**: BT.601 (SD) / BT.709 (height ≥ 720) auto-default with
+  manual switch; full range by default. Bilinear chroma upsampling aligned with
+  the reference Python tool (cv2 INTER_LINEAR); conversion runs in the
+  `yuv_convert_planes` WASM export with a pure-JS fallback (`YuvParser.yuvToRGBA`).
+- **Performance**: preview uses downscale-first conversion (an 8K preview takes
+  ~10-20 ms); full-resolution conversion is deferred until the lightbox opens
+  (one-shot, needed for lossless PNG export).
+- **Display**: stats bar shows resolution/format/frames/FPS; MediaInfo shows the
+  raw YUV section; timeline shows one bar per frame; per-frame info shows frame
+  index and synthetic timestamp (frameIdx/fps), with file mtime as capture time.
+
+Design details: [`docs/superpowers/specs/2026-09-17-yuv-parser-design.md`](docs/superpowers/specs/2026-09-17-yuv-parser-design.md)
 
 ### SEI Plugin System
 
-#### Built-in Plugin Loading
+#### Loading a Plugin
 
-1. Click "⚙ Plugin" button in toolbar
-2. Select `.js` plugin file
-3. Plugin auto-registers, parses SEI messages with matching UUID
+1. Click the "⚙ Plugin" button in the toolbar
+2. Select a `.js` plugin file (a plain script, not an ES module)
+3. The plugin registers itself via the global `BrowserCodecAnalyzer.registerPlugin(...)`; on success the status bar reports the number of registered plugins
+4. Click an SEI NAL in the NAL list — the plugin's parsed fields are appended to the syntax tree
 
 #### Plugin Development Specification
 
-Plugin file must export `registerSEIPlugin(registry)` function:
+A plugin is a plain `.js` file that calls `BrowserCodecAnalyzer.registerPlugin(...)`.
+Matching is by **SEI payloadType** (not UUID). A complete, runnable example:
+[`www/plugins/example-sei.js`](www/plugins/example-sei.js).
 
 ```javascript
 // my-sei-plugin.js
-export function registerSEIPlugin(registry) {
-  registry.register({
-    // SEI payloadType UUID (16-byte hex string)
-    uuid: '12345678-9abc-def0-1234-56789abcdef0',
-    
-    // Display name
-    name: 'Custom SEI Message',
-    
-    // Parse function: payload is Uint8Array, returns parsed object
-    parse: (payload, offset, size) => {
-      const view = new DataView(payload.buffer, offset, size);
-      // Parsing logic...
-      return {
-        field1: view.getUint32(0),
-        field2: view.getUint16(4),
-        // Nested objects auto-expand in syntax tree
-        nested: { a: 1, b: 2 }
-      };
-    }
-  });
-}
+BrowserCodecAnalyzer.registerPlugin({
+  // Display name
+  name: "Custom SEI (payloadType 137)",
+
+  // Optional codec filter: "hevc" / "avc"; omit to match all codecs
+  codec: "hevc",
+
+  // payloadType: single number, or payloadTypes: [137, 138]
+  payloadType: 137,
+
+  // Parse function: ctx is a BitReader, meta carries payload info.
+  // Return a tree node rendered in the syntax tree.
+  parse: function (ctx, meta) {
+    // ctx.readBits(n) / ctx.readU(n)   — read n bits
+    // ctx.readUe() / ctx.readSe()      — unsigned / signed Exp-Golomb
+    // ctx.bitsLeft                     — remaining bits
+    // meta: { codec, payloadType, payloadSize }
+    var value = ctx.readBits(16);
+    return {
+      name: "My SEI Group",       // optional group name
+      children: [
+        { name: "field1", value: value },
+        { name: "sub", children: [ /* nested groups */ ] }
+      ]
+    };
+  }
+});
 ```
 
-**Registry API**:
+**Plugin registry API** (global object `window.BrowserCodecAnalyzer`):
 
-```typescript
-interface SEIRegistry {
-  register(plugin: SEIPlugin): void;
-  unregister(uuid: string): void;
-  get(uuid: string): SEIPlugin | undefined;
-}
+| Function | Description |
+|----------|-------------|
+| `registerPlugin(plugin)` | Register a plugin; returns `false` (with console warning) if `parse` or `payloadType(s)` is missing |
+| `getPlugins()` | List registered plugins |
+| `clearPlugins()` | Remove all plugins |
+| `runSeiPlugin(fileBytes, nal, codec)` | Internal: run the first matching plugin on an SEI NAL |
 
-interface SEIPlugin {
-  uuid: string;           // 16-byte UUID, hex with hyphens
-  name: string;           // Display name
-  parse: (payload: Uint8Array, offset: number, size: number) => any;
-}
-```
+Notes:
+- Only the first SEI message inside a NAL unit is passed to plugins.
+- Plugins run in the page context; the file is evaluated once on load.
 
 ---
 
 ## CLI Tool User Guide
+
+> Scope: the CLI parses **raw H.264/HEVC/VVC bitstreams only**. Containers
+> (MP4/WebM/IVF/TS), images (HEIC/AVIF/JPEG/...), and raw YUV are Web UI only.
 
 ### Basic Syntax
 
@@ -418,12 +490,15 @@ interface SEIPlugin {
           │                │                │
           ▼                ▼                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                     Container Demux Layer (demux.js)              │
+│                     Frontend Router (app.js handleFile)           │
+│  .yuv → YuvParser: guess size/format from file size (+ WASM      │
+│         yuv_convert_planes conversion, JS fallback)               │
+│  JPEG/PNG/GIF/WebP/BMP → browser-native / JpegParser             │
+│  AVIF/HEIC → demux.js extract (libheif/dav1d WASM decode)       │
 │  MP4/MOV  → ISOBMFF Parse  → Extract Video Track + Bitstream     │
 │  WebM     → Matroska Parse → Extract Video Track + Bitstream     │
-│  IVF      → IVF Parse      → Extract Frame Data                  │
-│  Images   → Format Detect  → Extract Encoded Data (HEIC→libheif) │
-└────────────────────────────┬──────────────────────────────────────┘
+│  IVF/TS   → IVF/MPEG-TS Parse → Extract Frame Data/Bitstream     │
+└────────────────────────────┬────────────────────────────────────┘
                              │ Raw Bitstream Bytes (Uint8Array)
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
@@ -466,15 +541,19 @@ interface SEIPlugin {
 │  │  hevc_free → Free C String Memory                        │    │
 │  └────────────────────────────┬──────────────────────────────┘    │
 └─────────────────────────────┼─────────────────────────────────────┘
-                              │ JavaScript (ES Module)
+                              │ JavaScript (global createHevcModule)
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Frontend Render Layer (app.js)               │
 │  ┌────────────┐ ┌──────────┐ ┌─────────┐ ┌────────┐ ┌────────┐  │
-│  │ NAL List   │ │ Timeline │ │ Syntax  │ │ Preview│ │ Hex    │  │
+│  │ NAL List   │ │ Timeline │ │ Syntax │ │ Preview│ │ Hex    │  │
 │  │ Virtual    │ │ Canvas   │ │ Tree    │ │ Canvas │ │ View   │  │
-│  │ Scroll     │ │ Rendering│ │ (DOM)   │ │(WebGL/2D)          │  │
+│  │ Scroll     │ │ Rendering│ │ (DOM)   │ │+Lightbox│ │(4KB cap)│ │
 │  └────────────┘ └──────────┘ └─────────┘ └────────┘ └────────┘  │
+│  ┌──────────┐ ┌──────────┐ ┌────────────┐ ┌──────────────────┐  │
+│  │ SEI Tab  │ │ Bitrate  │ │ MediaInfo  │ │ YUV Settings     │  │
+│  │ (table)  │ │ (chart)  │ │ / HDR /Warn│ │ (guess + convert) │  │
+│  └──────────┘ └──────────┘ └────────────┘ └──────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -596,79 +675,109 @@ char *vvc_get_nal_syntax(size_t index);
 void vvc_reset();
 ```
 
+#### YUV Conversion API (WASM only)
+
+```c
+// Convert separate Y/U/V planes to an RGBA buffer (malloc'd; free with hevc_free).
+// The JS wrapper extracts separate u/v planes first (getFrame), so format only
+// selects the subsampling factors. format is the index into the JS
+// YuvParser.FORMAT_ORDER table: 0=i420, 1=nv12, 2=yv12, 3=nv21,
+// 4=yuv422p, 5=yuyv, 6=uyvy, 7=yuv444p
+// matrix: 0=bt601, 1=bt709;  fullRange: 0/1
+uint8_t *yuv_convert_planes(const uint8_t *y, size_t yLen,
+                            const uint8_t *u, size_t uLen,
+                            const uint8_t *v, size_t vLen,
+                            int width, int height, int format,
+                            int matrix, int fullRange);
+```
+
 ### JavaScript API (app.js Core Module)
 
 #### createHevcModule (WASM Module Factory)
 
-```javascript
-// hevc.js generated by Emscripten, exports default factory
-import createHevcModule from './hevc.js';
+`www/index.html` loads the Emscripten glue via a plain `<script src="hevc.js">`
+tag; the factory is consumed as a **global** (no bundler / ES import needed):
 
-const Module = await createHevcModule({
-  locateFile: (path) => `./${path}`  // WASM file path resolution
+```javascript
+// app.js boot: instantiate the module, keep the resolved instance
+createHevcModule().then(function (m) {
+  Module = m;   // ready — _malloc / _hevc_parse / ... available
 });
 
-// Available functions (wrapped via Module.cwrap)
-const hevc_parse = Module.cwrap('hevc_parse', 'string', ['number', 'number']);
-const hevc_get_nal_syntax = Module.cwrap('hevc_get_nal_syntax', 'string', ['number']);
-const hevc_reset = Module.cwrap('hevc_reset', null, []);
-const detect_codec = Module.cwrap('detect_codec', 'string', ['number', 'number']);
-const hevc_free = Module.cwrap('hevc_free', null, ['number']);
-const _malloc = Module.cwrap('malloc', 'number', ['number']);
-const _free = Module.cwrap('free', null, ['number']);
-const HEAPU8 = Module.HEAPU8;
+// Usage pattern (actual app.js code): call the _-prefixed exports
+// directly on the module and read C strings with UTF8ToString
+var ptr = Module._malloc(bytes.length);
+Module.HEAPU8.set(bytes, ptr);
+var outPtr = Module._hevc_parse(ptr, bytes.length);   // or _avc_parse / _vvc_parse
+var json = Module.UTF8ToString(outPtr);
+Module._hevc_free(outPtr);
+Module._free(ptr);
+
+// Codec detection
+var codecPtr = Module._detect_codec(ptr, bytes.length);
+var codec = Module.UTF8ToString(codecPtr);            // "avc" | "hevc" | "vvc" | "unknown"
+Module._hevc_free(codecPtr);
+
+// YUV conversion (WASM path)
+var rgbaPtr = Module._yuv_convert_planes(py, yLen, pu, uLen, pv, vLen,
+                                         w, h, fmtIdx, matrix, fullRange);
 ```
+
+`cwrap`/`ccall` are also exported (`EXPORTED_RUNTIME_METHODS`) and may be used
+instead of the `_`-prefixed direct calls.
 
 #### Memory Management Pattern
 
-```javascript
-// Copy Uint8Array to WASM heap
-function copyToHeap(uint8Array) {
-  const ptr = _malloc(uint8Array.length);
-  HEAPU8.set(uint8Array, ptr);
-  return ptr;
-}
+The ownership rules that must be respected by any caller:
 
-// Complete call example
-async function parseHEVC(fileData) {
-  const Module = await createHevcModule();
-  const ptr = copyToHeap(fileData);
-  try {
-    const summaryJson = Module.hevc_parse(ptr, fileData.length);
-    Module.hevc_free(ptr);
-    return JSON.parse(summaryJson);
-  } catch (e) {
-    Module.hevc_free(ptr);
-    throw e;
-  }
+- `hevc_parse` / `avc_parse` / `vvc_parse` / `detect_codec` /
+  `*_get_nal_syntax` / `yuv_convert_planes` return a **malloc'd C buffer** —
+  always release it with `hevc_free` after copying to JS.
+- Buffers copied into the WASM heap with `_malloc` must be released with
+  `_free` (see `parseBuffer` in app.js for the reference flow).
+
+```javascript
+var ptr = Module._malloc(bytes.length);
+Module.HEAPU8.set(bytes, ptr);
+try {
+  var outPtr = Module._hevc_parse(ptr, bytes.length);
+  var summary = JSON.parse(Module.UTF8ToString(outPtr));
+  Module._hevc_free(outPtr);       // release the returned JSON buffer
+  return summary;
+} finally {
+  Module._free(ptr);               // release the input copy
 }
 ```
 
-#### Frontend Core Classes (app.js)
+#### Frontend Structure (app.js)
+
+`app.js` is written as an IIFE of plain functions (no classes). Key functions:
 
 ```javascript
-// App Class - Main Application Controller
-class App {
-  constructor() { ... }
-  
-  // File loading entry point
-  async loadFile(file) { ... }
-  
-  // Parse bitstream
-  async parseBitstream(data, codecHint) { ... }
-  
-  // Render NAL list
-  renderNalList(summary) { ... }
-  
-  // Render syntax tree
-  renderSyntaxTree(nalIndex) { ... }
-  
-  // Render timeline
-  renderTimeline(summary) { ... }
-  
-  // Video preview
-  previewFrame(frameIndex, decodeOrder) { ... }
-}
+// File loading entry point: routes by extension/signature
+// (.yuv / JPEG / image / AVIF / HEIC / MP4 / TS / IVF / WebM / raw)
+handleFile(file)                    // app.js:~2645
+
+// Raw bitstream parse: detect codec → call WASM hevc/avc/vvc_parse
+parseBuffer(bytes, hintCodec)       // app.js:~79
+
+// NAL list row click → syntax tree + hex for that NAL
+selectNal(index, scrollTo)          // app.js:~2438
+
+// Timeline canvas render (frame bars, zoom, hover tooltip)
+renderTimeline()
+
+// Frame preview: WebCodecs / vvdec / dav1d / YUV-convert branch
+previewFrame(sliceIndex)
+
+// Per-NAL SEI message table
+renderSeiTab()                      // app.js:~2402
+
+// Frame lightbox: full-res modal, Fit/100%, Save PNG
+openFrameModal()                    // app.js:~639
+
+// YUV settings panel + re-parse on Apply
+showYuvSettings() / applyYuvSettings() / buildYuvData(...)  // app.js:~439-563
 ```
 
 ---
@@ -753,16 +862,14 @@ extern "C" {
 
 #### 5. Update Build System
 
-**Makefile**:
-```makefile
-NEWCODEC_SRC := $(wildcard src/newcodecparser/src/*.cpp)
-NATIVE_SRC := ... $(NEWCODEC_SRC) ...
+**build.sh** (canonical web build — CI uses it): add the new sources to the
+`em++` source list, add `-Isrc/newcodecparser/include` etc. to the include
+paths, and add `_newcodec_parse`, `_newcodec_get_nal_syntax`, `_newcodec_reset`
+to `-s EXPORTED_FUNCTIONS`.
 
-wasm:
-	$(EMCC) ... $(NEWCODEC_SRC) ... -o dist/hevc.js
-```
-
-**build.sh**: Sync add source files and exported functions.
+**Makefile**: add the new sources to `NATIVE_SRC` (and to the `wasm` target —
+note the `wasm` target is currently missing `src/yuv/*.cpp`; keep it in sync
+or rely on `build.sh`).
 
 #### 6. Update CodecDetector
 
@@ -778,40 +885,32 @@ std::string detectCodec(const uint8_t* data, size_t size) {
 #### 7. Frontend Integration (app.js)
 
 ```javascript
-// In App.parseBitstream add branch
+// In parseBuffer / handleFile add a branch for the new codec,
+// wrapping the WASM exports via Module.cwrap, e.g.:
 if (codec === 'newcodec') {
-  summary = await this.parseNewCodec(data);
+  summary = parseNewCodec(data);   // cwrap('newcodec_parse', ...) + JSON.parse
 }
 ```
 
 ### Adding New Container Format Support
 
-Extend `Demuxer` class in `www/js/demux.js`:
+Extend the `H26xDemux` object in `www/js/demux.js` (a plain module of probe +
+parse functions, not a class), then route to it in `handleFile` (`www/js/app.js`):
 
 ```javascript
-class Demuxer {
-  static async probe(file) {
-    const header = await file.slice(0, 12).arrayBuffer();
-    const view = new DataView(header);
-    
-    // MP4/MOV: ftyp box
-    if (view.getUint32(4) === 0x66747970) return 'mp4';
-    // WebM: EBML header
-    if (view.getUint32(0) === 0x1A45DFA3) return 'webm';
-    // IVF: "DKIF"
-    if (view.getUint32(0) === 0x444B4946) return 'ivf';
-    // New format detection...
-  }
-  
-  static async demux(file, type) {
-    switch (type) {
-      case 'mp4': return this.demuxMP4(file);
-      case 'webm': return this.demuxWebM(file);
-      case 'ivf': return this.demuxIVF(file);
-      case 'newfmt': return this.demuxNewFormat(file); // New
-    }
-  }
+// demux.js — signature probe (synchronous, operates on the full Uint8Array)
+function isNewFmt(d) { /* magic-byte check */ }
+function demuxNewFmt(d) {
+  // Parse container → return { annexb, frames, ... } or codec-specific
+  // { frames, obus/units, width, height, ... } for AV1/VP9-style paths
 }
+
+// Export on the shared object (see the bottom of demux.js):
+// H26xDemux.isNewFmt = isNewFmt;
+// H26xDemux.demuxNewFmt = demuxNewFmt;
+
+// app.js handleFile() — add a branch BEFORE the raw-bitstream fallback:
+// else if (H26xDemux.isNewFmt(rawBytes)) { ... }
 ```
 
 ---
@@ -836,50 +935,38 @@ class Demuxer {
 | Syntax tree empty/broken | Right panel blank | 1. Click different NAL list rows<br>2. Check console `hevc_get_nal_syntax` return value<br>3. Verify NAL index not out of bounds |
 | Preview shows black screen | Preview tab no image | 1. Verify WebCodecs support (Chrome 94+, Firefox 110+)<br>2. VVC needs vvdec WASM - check Network tab<br>3. AV1 needs dav1d WASM<br>4. Click different frames on timeline |
 | HDR info not showing | Bottom panel empty | 1. Confirm bitstream has SEI: mastering_display_colour_volume / content_light_level_info<br>2. HEVC: VUI colour_description_present_flag=1<br>3. Click corresponding NAL (usually SPS/VPS) to verify in syntax tree |
+| YUV auto-guess fails | Settings panel shows "size not divisible — set resolution/format" | Expected for non-standard sizes: enter Width/Height/Format manually and click Apply |
+| YUV colors look wrong | Preview tinted/shifted | Switch Color Matrix (BT.601 ↔ BT.709) in the YUV settings bar; default is full range |
+| YUV Play does nothing | Play button no effect | By design: single-frame mode — a `.yuv` file is treated as one frame |
 
 ### Performance Issues
 
 | Symptom | Optimization Suggestions |
 |---------|-------------------------|
 | Slow parsing on large files (>500MB) | 1. Only load visible NAL range (virtual scroll implemented)<br>2. Consider chunked parsing (Web Worker)<br>3. Ensure `ALLOW_MEMORY_GROWTH` enabled |
-| Timeline rendering lag | 1. Reduce Canvas redraw frequency<br>2. Use OffscreenCanvas in Worker<br>3. Simplify frame drawing logic |
+| Timeline rendering lag | Long streams: zoom auto-fit + offscreen base-image cache (implemented); further: OffscreenCanvas in Worker |
 | High memory usage | 1. Call `hevc_reset()` promptly to release parser<br>2. Avoid holding multiple large files simultaneously<br>3. Use `URL.revokeObjectURL()` to release Blob URLs |
+| YUV preview slow on 8K | Downscale-first preview + WASM conversion implemented; full-res conversion deferred to lightbox open |
 
 ---
 
 ## Performance Optimization
 
-### 1. Parsing Level
+Implemented optimizations (verified in code):
 
-- **Incremental Parsing**: Large files parsed in chunks using `process(data, size, offset)` offset parameter
-- **Parallelization**: Multi-thread parsing of different Layer/Temporal IDs (requires parser support)
-- **Streaming Processing**: Combine with `ReadableStream` for parse-while-download
+- **Virtual scrolling**: NAL list renders only visible rows
+- **Downscale-first YUV preview**: converts only display-size pixels (~80x work reduction for 8K); full-res conversion deferred to lightbox
+- **YUV LUT conversion + WASM**: 256-entry lookup tables; WASM `yuv_convert_planes` preferred with JS fallback
+- **Hex view 4 KB cap**: prevents multi-MB HTML renders for YUV frames
+- **Timeline**: offscreen base-image cache; auto-fit zoom and min clickable frame width for long videos
+- **ALLOW_MEMORY_GROWTH**: WASM heap grows dynamically for large files
 
-### 2. WASM Level
+Future optimization directions (not yet implemented):
 
-```bash
-# Optimized compilation flags
--s WASM=1 \
--s ALLOW_MEMORY_GROWTH=1 \
--s INITIAL_MEMORY=64MB \        # Adjust based on typical file sizes
--s MAXIMUM_MEMORY=2GB \         # Set upper limit
--s STACK_SIZE=5MB \             # Stack size
--O3 \                           # Release build uses O3
--flto \                         # Link-time optimization
-```
-
-### 3. Frontend Rendering Level
-
-- **Virtual Scrolling**: NAL list renders only visible rows (implemented)
-- **Offscreen Canvas**: Timeline rendering moved to Worker via OffscreenCanvas
-- **Debounce/Throttle**: Window resize, scroll events debounced
-- **Web Workers**: Syntax tree building, Hex view generation moved to Workers
-
-### 4. Network Level
-
-- **Range Requests**: Large files support HTTP Range for partial loading
-- **Service Worker**: Cache WASM, JS, plugin files
-- **CDN Distribution**: Static assets via CDN
+- Chunked/parallel parsing in Web Workers
+- OffscreenCanvas timeline rendering in a Worker
+- HTTP Range requests / Service Worker caching / CDN distribution
+- `-O3` / `-flto` / `INITIAL_MEMORY` tuning in the emcc flags
 
 ---
 
@@ -888,6 +975,7 @@ class Demuxer {
 | Version | Date | Changes |
 |---------|------|---------|
 | v1.0.0 | 2024 | Initial release: HEVC/AVC/VVC parsing, Web UI, CLI, SEI plugins, HDR support |
+| (HEAD) | 2026-09 | Raw YUV support (8 formats, auto-guess + settings, BT.601/709, WASM conversion, lightbox + PNG export); SEI tab; frame lightbox for all codecs; custom H.264 frame-ts SEI; hex 4KB cap; GitHub/GitLab Pages CI |
 
 ---
 

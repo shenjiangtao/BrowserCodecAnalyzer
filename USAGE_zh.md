@@ -24,9 +24,10 @@ BrowserCodecAnalyzer (项目代号 BrowserCodecAnalyzer) 是一款专为视频�
 | 能力维度 | 支持范围 |
 |---------|---------|
 | **视频编码标准** | H.264/AVC, H.265/HEVC, H.266/VVC, AV1, VP9 |
-| **容器格式** | MP4/M4V/MOV, WebM, IVF, MPEG-TS |
+| **容器格式** | MP4/M4V/MOV (含 fMP4), WebM, IVF, MPEG-TS |
 | **图像格式** | HEIC/HEIF, AVIF, JPEG, PNG, GIF, WebP, BMP |
 | **裸流格式** | .h264, .h265, .h266, .264, .265, .266, .avc, .hevc, .vvc, .bin, .bit, .obu |
+| **Raw YUV** | 8-bit：I420, YV12, NV12, NV21, YUV422p, YUYV, UYVY, YUV444p (仅 Web 界面) |
 | **输出形态** | Web 界面 (WASM), 原生 CLI (C++) |
 
 ### 适用场景
@@ -120,7 +121,7 @@ em++ [源文件...] \
 |------|------|
 | `-s WASM=1` | 生成 WebAssembly |
 | `-s ALLOW_MEMORY_GROWTH=1` | 允许内存动态增长，防止大文件 OOM |
-| `-s MODULARIZE=1` | 生成 ES6 模块，支持 `import`/`await` |
+| `-s MODULARIZE=1` | 生成模块工厂（全局 `createHevcModule`，也可作为 ES 模块 import） |
 | `-s EXPORT_NAME=createHevcModule` | 导出的模块工厂函数名 |
 | `EXPORTED_FUNCTIONS` | 导出的 C 函数供 JS 调用 |
 
@@ -141,8 +142,17 @@ make native
 |------|------|
 | `make` / `make all` | 默认构建 native |
 | `make native` | 构建原生可执行文件 `hevcparser_native` |
-| `make wasm` | 构建 Web 版本 (等同 `./build.sh`) |
+| `make wasm` | 构建 Web 版本 — **当前与 build.sh 不同步**：缺少 `src/yuv/*.cpp` 与 `_yuv_convert_planes` 导出，产物无 YUV WASM 转换能力，请优先使用 `./build.sh` |
 | `make clean` | 清理所有构建产物 |
+
+### 方式三：CI / Pages 自动部署
+
+仓库自带两条开箱即用的部署流水线，均执行 `./build.sh` 并发布 `dist/`：
+
+| 平台 | 配置 | 触发方式 |
+|------|------|---------|
+| **GitHub Pages** | `.github/workflows/deploy.yml` | push 到 `main`/`master`，或手动触发 |
+| **GitLab Pages** | `.gitlab-ci.yml` | push 到 `main`/`master` 或手动流水线（页面地址 `https://<user>.gitlab.io/<project>`） |
 
 ---
 
@@ -158,9 +168,11 @@ make native
 ├─────────────────────────────────────────────────────────────┤
 │ Stats Bar: 码率、帧率、分辨率、Profile 等统计信息              │
 ├─────────────────────────────────────────────────────────────┤
+│ YUV Settings Bar (仅 .yuv 文件显示)                           │
+├─────────────────────────────────────────────────────────────┤
 │ Timeline Panel: 帧结构时间轴 (I=红, P=蓝, B=绿)               │
 ├──────────────────┬──────────────────────────────────────────┤
-│ NAL Unit List    │ Syntax / Preview / Hex / MediaInfo / Bitrate │
+│ NAL Unit List    │ Syntax / Preview / Hex / SEI / MediaInfo / Bitrate │
 │ (左侧面板)        │ (右侧面板，标签页切换)                      │
 ├──────────────────┴──────────────────────────────────────────┤
 │ Bottom Panels: HDR/Color Info | Warnings Table             │
@@ -181,23 +193,20 @@ make native
 
 | 列 | 含义 | 交互 |
 |----|------|------|
-| Offset | 文件偏移量 (字节) | 点击复制偏移量 |
+| Offset | 文件偏移量 (字节) | - |
 | Length | NAL 单元长度 | - |
 | Type | NAL 类型名称 (VPS/SPS/PPS/IDR/非IDR/SEI等) | 颜色编码区分 |
 | Frame | 所属帧号 (POC) | - |
 | Info | 关键语法元素摘要 | 悬浮显示完整信息 |
 
 **操作**：
-- 点击任意行 → 右侧显示该 NAL 的完整语法树
+- 点击任意行 → 右侧显示该 NAL 的完整语法树和 Hex 字节
 - 滚动列表 → 自动加载可见区域行 (虚拟滚动，支持百万级 NAL)
-- 双击 → 定位到时间轴对应帧
 
 #### 2. 语法树标签页 (Syntax)
 
 - **树状结构**：按语法层级展示所有语法元素
 - **展开/折叠**：点击 ▶/▼ 图标
-- **搜索**：`Ctrl+F` 在语法树中查找字段名/值
-- **复制**：点击行 → 复制路径/值/完整行
 
 **语法元素字段说明**：
 ```
@@ -210,39 +219,63 @@ make native
 - **视频解码预览**：点击时间轴帧 → 解码并显示该帧
 - **播放控制**：▶ 播放、|◀ 上一帧、▶| 下一帧
 - **序列切换**："Decode Order" ↔ "Display Order"
+- **帧放大镜**：点击预览画布 → 全分辨率弹窗，支持 **Fit / 100%** 两种缩放与 **Save PNG** 无损导出当前帧（所有编解码器及 Raw YUV 均支持）
 - **支持的解码器**：
   - H.264/H.265/VP9 → 浏览器原生 WebCodecs
   - H.266/VVC → vvdec WASM (需额外加载)
   - AV1 → dav1d WASM (需额外加载)
+  - HEIC → libheif WASM；AVIF → dav1d WASM；JPEG/PNG/GIF/WebP/BMP → 浏览器原生
 
 #### 4. 十六进制视图标签页 (Hex)
 
-- **原始字节查看**：完整 NAL 单元的十六进制 + ASCII
-- **高亮当前语法元素**：点击语法树节点 → Hex 视图高亮对应字节范围
+- **原始字节查看**：NAL 单元的十六进制 + ASCII
 - **地址栏**：显示文件绝对偏移
+- **截断上限**：每个 NAL 最多显示前 4KB（YUV 帧可达数十 MB，截断时显示提示）
 
-#### 5. MediaInfo 标签页
+#### 5. SEI 标签页
 
-容器级元数据 (仅 MP4/MOV/WebM/IVF)：
+全流 SEI 消息汇总表（每条 SEI 消息一行）：
+
+| 列 | 含义 |
+|----|------|
+| NAL # | 携带该消息的 NAL 单元编号 |
+| Offset | 该 NAL 单元的文件偏移 |
+| Payload Type | 类型名称（如 decoded picture hash）+ 数字 payloadType |
+| Size | Payload 字节数 |
+| Text / Content | 可打印内容以文本显示，非文本显示 `(binary)` |
+| Frame TS | 从 H.264 定制 `"frame ts"` SEI 提取的帧时间戳（存在时） |
+
+- 点击行 → 选中对应 NAL 单元（并显示其语法树）
+- 自定义 SEI payload 可通过 SEI 插件系统解析（见下文）
+
+#### 6. MediaInfo 标签页
+
+容器级元数据 (MP4/MOV/WebM/IVF)：
 - 格式、主品牌、兼容品牌
 - 时长、总码率
 - 轨道信息：类型、编解码器、分辨率、帧率、语言
 
-#### 6. 码率统计标签页 (Bitrate)
+Raw YUV 文件在该页显示 YUV 信息：像素排列、分辨率、帧率、帧数、帧大小、
+文件大小、时长 (frames/fps)，以及预留的 "Additional Metadata (SEI-like)"
+占位区（为将来接入传感器/GPS/IMU 数据源）。
 
-- **帧级码率图表**：每帧大小随时间变化
-- **统计指标**：平均码率、峰值码率、I/P/B 平均帧大小
-- **导出**：CSV 格式下载
+#### 7. 码率统计标签页 (Bitrate)
 
-#### 7. 时间轴面板
+- **帧级码率图表**：每帧瞬时码率柱状图，按帧类型着色 (I=红, P=蓝, B=绿)
+- **统计指标**：帧数、FPS、总大小、平均/峰值/最小码率（含帧号）、I/P/B 数量
+- **交互**：`+`/`−` 按钮缩放图表；悬浮显示单帧详情；当前选中帧高亮
+
+#### 8. 时间轴面板
 
 - **颜色编码**：I帧=红、P帧=蓝、B帧=绿、IDR=深红
-- **缩放**：`+`/`-` 键 或鼠标滚轮
-- **平移**：拖拽空白区域
+- **缩放**：面板上的 `+` / `−` 按钮
+- **逐帧步进**：面板上的 `|◀` / `▶|` 按钮
 - **点击帧**：选中并在预览区显示解码帧
+- **悬浮提示**：显示帧详情（类型、QP、大小；YUV 显示帧号与合成时间戳）
 - **进度指示**：播放时显示当前播放位置高亮
+- **长视频**：缩放自动适配；最小可点击帧宽限制保证长流仍可导航
 
-#### 8. HDR/色彩信息面板 (底部左)
+#### 9. HDR/色彩信息面板 (底部左)
 
 | 项目 | 来源 | 示例 |
 |------|------|------|
@@ -253,7 +286,7 @@ make native
 | 传输特性 | VUI transfer_characteristics | PQ (SMPTE ST 2084) / HLG / BT.709 |
 | 色度坐标 | VUI colour_primaries | BT.2020 / BT.709 / P3-D65 |
 
-#### 9. 告警面板 (底部右)
+#### 10. 告警面板 (底部右)
 
 | 等级 | 类型 | 说明 |
 |------|------|------|
@@ -263,77 +296,112 @@ make native
 
 **筛选器**：下拉框选择告警类型 (-1=全部, 1=越界, 2=参考结构, 3=Profile)
 
-### 键盘快捷键完整表
+### 界面操作参考
 
-| 快捷键 | 功能 | 作用区域 |
-|--------|------|---------|
-| `←` | 上一帧 | 全局 (聚焦非输入框时) |
-| `→` | 下一帧 | 全局 |
-| `+` / `=` | 时间轴放大 | 时间轴聚焦时 |
-| `-` / `_` | 时间轴缩小 | 时间轴聚焦时 |
-| `Space` | 播放/暂停 | 预览区聚焦时 |
-| `D` | 切换解码/显示序 | 预览区聚焦时 |
-| `Home` | 跳转首帧 | 时间轴 |
-| `End` | 跳转末帧 | 时间轴 |
-| `Ctrl+F` | 搜索语法树 | 语法树标签页 |
-| `Esc` | 关闭模态框/取消选择 | 全局 |
+所有操作均通过鼠标完成——本工具**没有键盘快捷键**。
+
+| 操作 | 位置 | 功能 |
+|------|------|------|
+| `+` / `−` 按钮 | 时间轴 / 码率面板 | 放大 / 缩小 |
+| `\|◀` / `▶\|` 按钮 | 时间轴面板 | 上一帧 / 下一帧 |
+| ▶ Play / \|◀ Prev / ▶\| Next | 预览标签页 | 播放与逐帧步进 |
+| "Decode Order" 切换 | 预览标签页 | 解码序 ↔ 显示序切换 |
+| 点击预览画布 | 预览标签页 | 打开全分辨率放大镜 (Fit/100%，Save PNG) |
+| 点击 NAL 行 | NAL 列表 | 显示该 NAL 的语法树 + Hex |
+| 点击帧条 | 时间轴 | 选中并预览该帧 |
+| 拖拽分割条 | 面板之间 | 调整栏宽 / 行高 |
+
+### Raw YUV 文件 (.yuv)
+
+Raw YUV 没有头信息——尺寸、格式、帧率依据文件大小猜测，用户可手动修改。
+YUV 支持**仅限 Web 界面**（CLI 只解析 H.264/HEVC/VVC 裸流）。
+
+- **自动猜测**：仅接受文件大小恰好等于单帧大小的候选
+  (`fileSize === frameSize`)；排序 NV12 优先（相机/ADAS 惯例），其次
+  I420、packed YUYV/UYVY。无匹配候选时打开设置面板等待手动输入。
+- **YUV 设置栏**（统计栏下方，仅 YUV 文件显示）：
+  Width / Height 数字输入、Format 下拉（8 种排列：I420、YV12、NV12、
+  NV21、YUV422p、YUYV、UYVY、YUV444p）、FPS（默认 30）、色彩矩阵
+  (BT.601 / BT.709)、Apply 按钮 → 重新解析并刷新所有视图。
+- **单帧模式**：`.yuv` 文件按单帧处理；Play 对 YUV 无效果。
+  最大分辨率 7680×4320 (8K)，Apply 时校验。
+- **色彩转换**：默认按分辨率自动选矩阵（SD → BT.601，高度 ≥720 →
+  BT.709），可手动切换；默认 full range。色度双线性上采样与参考
+  Python 工具 (cv2 INTER_LINEAR) 对齐；转换优先走 `yuv_convert_planes`
+  WASM 导出，JS (`YuvParser.yuvToRGBA`) 兜底。
+- **性能**：预览采用降采样优先转换（8K 预览约 10-20ms）；全分辨率转换
+  延迟到放大镜打开时一次性执行（无损 PNG 导出需要）。
+- **显示**：统计栏显示分辨率/格式/帧数/FPS；MediaInfo 显示 YUV 信息；
+  时间轴每帧一条；帧详情显示帧号与合成时间戳 (frameIdx/fps)，文件
+  mtime 作为采集时间。
+
+设计详见 [`docs/superpowers/specs/2026-09-17-yuv-parser-design.md`](docs/superpowers/specs/2026-09-17-yuv-parser-design.md)
 
 ### SEI 插件系统
 
-#### 内置插件加载
+#### 插件加载
 
 1. 点击工具栏 "⚙ Plugin" 按钮
-2. 选择 `.js` 插件文件
-3. 插件自动注册，解析对应 UUID 的 SEI 消息
+2. 选择 `.js` 插件文件（普通脚本，非 ES module）
+3. 插件调用全局 `BrowserCodecAnalyzer.registerPlugin(...)` 自行注册；成功后状态栏显示注册的 SEI 解析器数量
+4. 在 NAL 列表点击 SEI NAL — 插件解析出的字段追加显示在语法树中
 
 #### 插件开发规范
 
-插件文件需导出 `registerSEIPlugin(registry)` 函数：
+插件为普通 `.js` 文件，调用 `BrowserCodecAnalyzer.registerPlugin(...)`。
+按 **SEI payloadType** 匹配（而非 UUID）。完整可运行示例：
+[`www/plugins/example-sei.js`](www/plugins/example-sei.js)。
 
 ```javascript
 // my-sei-plugin.js
-export function registerSEIPlugin(registry) {
-  registry.register({
-    // SEI payloadType UUID (16字节十六进制字符串)
-    uuid: '12345678-9abc-def0-1234-56789abcdef0',
-    
-    // 显示名称
-    name: 'Custom SEI Message',
-    
-    // 解析函数：payload 为 Uint8Array，返回解析后的对象
-    parse: (payload, offset, size) => {
-      const view = new DataView(payload.buffer, offset, size);
-      // 解析逻辑...
-      return {
-        field1: view.getUint32(0),
-        field2: view.getUint16(4),
-        // 嵌套对象自动在语法树中展开
-        nested: { a: 1, b: 2 }
-      };
-    }
-  });
-}
+BrowserCodecAnalyzer.registerPlugin({
+  // 显示名称
+  name: "Custom SEI (payloadType 137)",
+
+  // 可选编解码器过滤: "hevc" / "avc"；缺省匹配所有
+  codec: "hevc",
+
+  // payloadType: 单个数字，或 payloadTypes: [137, 138]
+  payloadType: 137,
+
+  // 解析函数: ctx 为位读取器 BitReader，meta 携带 payload 信息。
+  // 返回树节点，渲染进语法树。
+  parse: function (ctx, meta) {
+    // ctx.readBits(n) / ctx.readU(n)   — 读 n 位
+    // ctx.readUe() / ctx.readSe()      — 无符号 / 有符号 Exp-Golomb
+    // ctx.bitsLeft                     — 剩余位数
+    // meta: { codec, payloadType, payloadSize }
+    var value = ctx.readBits(16);
+    return {
+      name: "My SEI Group",       // 可选组名
+      children: [
+        { name: "field1", value: value },
+        { name: "sub", children: [ /* 嵌套组 */ ] }
+      ]
+    };
+  }
+});
 ```
 
-**注册表 API**：
+**插件注册表 API**（全局对象 `window.BrowserCodecAnalyzer`）：
 
-```typescript
-interface SEIRegistry {
-  register(plugin: SEIPlugin): void;
-  unregister(uuid: string): void;
-  get(uuid: string): SEIPlugin | undefined;
-}
+| 函数 | 说明 |
+|------|------|
+| `registerPlugin(plugin)` | 注册插件；缺少 `parse` 或 `payloadType(s)` 时返回 `false`（并在控制台告警） |
+| `getPlugins()` | 列出已注册插件 |
+| `clearPlugins()` | 清空所有插件 |
+| `runSeiPlugin(fileBytes, nal, codec)` | 内部接口：对 SEI NAL 运行第一个匹配的插件 |
 
-interface SEIPlugin {
-  uuid: string;           // 16字节 UUID，十六进制含连字符
-  name: string;           // 显示名称
-  parse: (payload: Uint8Array, offset: number, size: number) => any;
-}
-```
+说明：
+- 每个 NAL 单元内仅第一条 SEI 消息会传给插件。
+- 插件在页面上下文中执行，文件在加载时求值一次。
 
 ---
 
 ## 命令行工具使用指南
+
+> 范围说明：CLI 仅解析 **H.264/HEVC/VVC 裸流**。容器
+> (MP4/WebM/IVF/TS)、图像 (HEIC/AVIF/JPEG/...) 与 Raw YUV 仅支持 Web 界面。
 
 ### 基本语法
 
@@ -418,11 +486,14 @@ interface SEIPlugin {
           │                │                │
           ▼                ▼                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                     容器解复用层 (demux.js)                        │
-│  MP4/MOV  → ISOBMFF 解析  → 提取视频轨道 + 码流数据                │
-│  WebM     → Matroska 解析 → 提取视频轨道 + 码流数据                │
-│  IVF      → IVF 解析      → 提取帧数据                            │
-│  图像     → 格式识别      → 提取编码数据 (HEIC→libheif, AVIF→dav1d) │
+│                     前端路由层 (app.js handleFile)                 │
+│  .yuv → YuvParser: 按文件大小猜测尺寸/格式                         │
+│         (WASM yuv_convert_planes 转换优先, JS 兜底)                │
+│  JPEG/PNG/GIF/WebP/BMP → 浏览器原生 / JpegParser                  │
+│  AVIF/HEIC → demux.js 提取 (libheif/dav1d WASM 解码显示)          │
+│  MP4/MOV  → ISOBMFF 解析  → 提取视频轨道 + 码流数据                 │
+│  WebM     → Matroska 解析 → 提取视频轨道 + 码流数据                 │
+│  IVF/TS   → IVF/MPEG-TS 解析 → 提取帧数据/码流                     │
 └────────────────────────────┬──────────────────────────────────────┘
                              │ 原始码流字节流 (Uint8Array)
                              ▼
@@ -466,15 +537,19 @@ interface SEIPlugin {
 │  │  hevc_free → 释放 C 字符串内存                             │    │
 │  └────────────────────────────┬──────────────────────────────┘    │
 └─────────────────────────────┼─────────────────────────────────────┘
-                              │ JavaScript (ES Module)
+                              │ JavaScript (全局 createHevcModule)
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                      前端渲染层 (app.js)                          │
 │  ┌────────────┐ ┌──────────┐ ┌─────────┐ ┌────────┐ ┌────────┐  │
 │  │ NAL List   │ │ Timeline │ │ Syntax  │ │ Preview│ │ Hex    │  │
 │  │ Virtual    │ │ Canvas   │ │ Tree    │ │ Canvas │ │ View   │  │
-│  │ Scroll     │ │ Rendering│ │ (DOM)   │ │(WebGL/2D)          │  │
+│  │ Scroll     │ │ Rendering│ │ (DOM)   │ │+放大镜 │ │(4KB上限)│ │
 │  └────────────┘ └──────────┘ └─────────┘ └────────┘ └────────┘  │
+│  ┌──────────┐ ┌──────────┐ ┌────────────┐ ┌──────────────────┐  │
+│  │ SEI 标签页│ │ Bitrate  │ │ MediaInfo  │ │ YUV 设置栏        │  │
+│  │ (消息表)  │ │ (码率图) │ │ / HDR/告警 │ │ (猜测+转换)       │  │
+│  └──────────┘ └──────────┘ └────────────┘ └──────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -596,79 +671,108 @@ char *vvc_get_nal_syntax(size_t index);
 void vvc_reset();
 ```
 
+#### YUV 转换 API (仅 WASM)
+
+```c
+// 将独立的 Y/U/V 平面转换为 RGBA 缓冲 (malloc 分配; 用 hevc_free 释放)。
+// JS 包装层先用 getFrame 提取独立的 u/v 平面，因此 format 仅决定子采样参数。
+// format 为 JS YuvParser.FORMAT_ORDER 表的索引：
+// 0=i420, 1=nv12, 2=yv12, 3=nv21, 4=yuv422p, 5=yuyv, 6=uyvy, 7=yuv444p
+// matrix: 0=bt601, 1=bt709；fullRange: 0/1
+uint8_t *yuv_convert_planes(const uint8_t *y, size_t yLen,
+                            const uint8_t *u, size_t uLen,
+                            const uint8_t *v, size_t vLen,
+                            int width, int height, int format,
+                            int matrix, int fullRange);
+```
+
 ### JavaScript API (app.js 核心模块)
 
 #### createHevcModule (WASM 模块工厂)
 
-```javascript
-// hevc.js 由 Emscripten 生成，导出默认工厂函数
-import createHevcModule from './hevc.js';
+`www/index.html` 通过普通 `<script src="hevc.js">` 标签加载 Emscripten
+胶水代码；工厂函数作为**全局变量**使用（无需打包器 / ES import）：
 
-const Module = await createHevcModule({
-  locateFile: (path) => `./${path}`  // WASM 文件路径解析
+```javascript
+// app.js 启动：实例化模块，保存解析后的实例
+createHevcModule().then(function (m) {
+  Module = m;   // 就绪 — 可调用 _malloc / _hevc_parse / ...
 });
 
-// 可用函数 (Module.cwrap 包装)
-const hevc_parse = Module.cwrap('hevc_parse', 'string', ['number', 'number']);
-const hevc_get_nal_syntax = Module.cwrap('hevc_get_nal_syntax', 'string', ['number']);
-const hevc_reset = Module.cwrap('hevc_reset', null, []);
-const detect_codec = Module.cwrap('detect_codec', 'string', ['number', 'number']);
-const hevc_free = Module.cwrap('hevc_free', null, ['number']);
-const _malloc = Module.cwrap('malloc', 'number', ['number']);
-const _free = Module.cwrap('free', null, ['number']);
-const HEAPU8 = Module.HEAPU8;
+// 实际用法 (app.js 代码)：直接调用 _ 前缀导出，
+// 用 UTF8ToString 读取 C 字符串
+var ptr = Module._malloc(bytes.length);
+Module.HEAPU8.set(bytes, ptr);
+var outPtr = Module._hevc_parse(ptr, bytes.length);   // 或 _avc_parse / _vvc_parse
+var json = Module.UTF8ToString(outPtr);
+Module._hevc_free(outPtr);
+Module._free(ptr);
+
+// 编解码器检测
+var codecPtr = Module._detect_codec(ptr, bytes.length);
+var codec = Module.UTF8ToString(codecPtr);            // "avc" | "hevc" | "vvc" | "unknown"
+Module._hevc_free(codecPtr);
+
+// YUV 转换 (WASM 路径)
+var rgbaPtr = Module._yuv_convert_planes(py, yLen, pu, uLen, pv, vLen,
+                                         w, h, fmtIdx, matrix, fullRange);
 ```
+
+`cwrap`/`ccall` 也已导出（见 `EXPORTED_RUNTIME_METHODS`），可替代 `_`
+前缀直接调用。
 
 #### 内存管理模式
 
-```javascript
-// 将 Uint8Array 复制到 WASM 堆
-function copyToHeap(uint8Array) {
-  const ptr = _malloc(uint8Array.length);
-  HEAPU8.set(uint8Array, ptr);
-  return ptr;
-}
+任何调用方都必须遵守的所有权规则：
 
-// 完整调用示例
-async function parseHEVC(fileData) {
-  const Module = await createHevcModule();
-  const ptr = copyToHeap(fileData);
-  try {
-    const summaryJson = Module.hevc_parse(ptr, fileData.length);
-    Module.hevc_free(ptr);
-    return JSON.parse(summaryJson);
-  } catch (e) {
-    Module.hevc_free(ptr);
-    throw e;
-  }
+- `hevc_parse` / `avc_parse` / `vvc_parse` / `detect_codec` /
+  `*_get_nal_syntax` / `yuv_convert_planes` 返回 **malloc 分配的 C 缓冲**——
+  拷贝到 JS 后必须用 `hevc_free` 释放。
+- 用 `_malloc` 拷入 WASM 堆的缓冲必须用 `_free` 释放
+  （参考流程见 app.js 的 `parseBuffer`）。
+
+```javascript
+var ptr = Module._malloc(bytes.length);
+Module.HEAPU8.set(bytes, ptr);
+try {
+  var outPtr = Module._hevc_parse(ptr, bytes.length);
+  var summary = JSON.parse(Module.UTF8ToString(outPtr));
+  Module._hevc_free(outPtr);       // 释放返回的 JSON 缓冲
+  return summary;
+} finally {
+  Module._free(ptr);               // 释放输入拷贝
 }
 ```
 
-#### 前端核心类 (app.js)
+#### 前端结构 (app.js)
+
+`app.js` 为 IIFE 组织的纯函数集合（无类）。关键函数：
 
 ```javascript
-// App 类 - 主应用控制器
-class App {
-  constructor() { ... }
-  
-  // 加载文件入口
-  async loadFile(file) { ... }
-  
-  // 解析码流
-  async parseBitstream(data, codecHint) { ... }
-  
-  // 渲染 NAL 列表
-  renderNalList(summary) { ... }
-  
-  // 渲染语法树
-  renderSyntaxTree(nalIndex) { ... }
-  
-  // 渲染时间轴
-  renderTimeline(summary) { ... }
-  
-  // 视频预览
-  previewFrame(frameIndex, decodeOrder) { ... }
-}
+// 文件加载入口：按扩展名/魔数路由
+// (.yuv / JPEG / 图像 / AVIF / HEIC / MP4 / TS / IVF / WebM / 裸流)
+handleFile(file)                    // app.js:~2645
+
+// 裸流解析：检测编解码器 → 调用 WASM hevc/avc/vvc_parse
+parseBuffer(bytes, hintCodec)       // app.js:~79
+
+// NAL 列表行点击 → 该 NAL 的语法树 + Hex
+selectNal(index, scrollTo)          // app.js:~2438
+
+// 时间轴画布渲染 (帧条、缩放、悬浮提示)
+renderTimeline()
+
+// 帧预览：WebCodecs / vvdec / dav1d / YUV 转换分支
+previewFrame(sliceIndex)
+
+// 每条 SEI 消息汇总表
+renderSeiTab()                      // app.js:~2402
+
+// 帧放大镜：全分辨率弹窗，Fit/100%，Save PNG
+openFrameModal()                    // app.js:~639
+
+// YUV 设置面板 + Apply 重新解析
+showYuvSettings() / applyYuvSettings() / buildYuvData(...)  // app.js:~439-563
 ```
 
 ---
@@ -753,16 +857,13 @@ extern "C" {
 
 #### 5. 更新构建系统
 
-**Makefile**：
-```makefile
-NEWCODEC_SRC := $(wildcard src/newcodecparser/src/*.cpp)
-NATIVE_SRC := ... $(NEWCODEC_SRC) ...
+**build.sh**（Web 构建标准入口——CI 即使用它）：将新源文件加入 `em++`
+源文件列表，include 路径追加 `-Isrc/newcodecparser/include` 等，并将
+`_newcodec_parse`、`_newcodec_get_nal_syntax`、`_newcodec_reset` 加入
+`-s EXPORTED_FUNCTIONS`。
 
-wasm:
-	$(EMCC) ... $(NEWCODEC_SRC) ... -o dist/hevc.js
-```
-
-**build.sh**：同步添加源文件和导出函数。
+**Makefile**：将新源文件加入 `NATIVE_SRC`（并同步 `wasm` 目标——注意
+`wasm` 目标当前缺少 `src/yuv/*.cpp`；请保持同步或直接依赖 build.sh）。
 
 #### 6. 更新 CodecDetector
 
@@ -778,40 +879,32 @@ std::string detectCodec(const uint8_t* data, size_t size) {
 #### 7. 前端集成 (app.js)
 
 ```javascript
-// 在 App.parseBitstream 中添加分支
+// 在 parseBuffer / handleFile 中为新增编解码器添加分支，
+// 通过 Module.cwrap 包装 WASM 导出，例如：
 if (codec === 'newcodec') {
-  summary = await this.parseNewCodec(data);
+  summary = parseNewCodec(data);   // cwrap('newcodec_parse', ...) + JSON.parse
 }
 ```
 
 ### 新增容器格式支持
 
-在 `www/js/demux.js` 中扩展 `Demuxer` 类：
+在 `www/js/demux.js` 中扩展 `H26xDemux` 对象（普通函数集合，并非类），
+然后在 `handleFile`（`www/js/app.js`）中路由：
 
 ```javascript
-class Demuxer {
-  static async probe(file) {
-    const header = await file.slice(0, 12).arrayBuffer();
-    const view = new DataView(header);
-    
-    // MP4/MOV: ftyp box
-    if (view.getUint32(4) === 0x66747970) return 'mp4';
-    // WebM: EBML header
-    if (view.getUint32(0) === 0x1A45DFA3) return 'webm';
-    // IVF: "DKIF"
-    if (view.getUint32(0) === 0x444B4946) return 'ivf';
-    // 新增格式检测...
-  }
-  
-  static async demux(file, type) {
-    switch (type) {
-      case 'mp4': return this.demuxMP4(file);
-      case 'webm': return this.demuxWebM(file);
-      case 'ivf': return this.demuxIVF(file);
-      case 'newfmt': return this.demuxNewFormat(file); // 新增
-    }
-  }
+// demux.js — 魔数探测 (同步，直接操作完整 Uint8Array)
+function isNewFmt(d) { /* 魔数检查 */ }
+function demuxNewFmt(d) {
+  // 解析容器 → 返回 { annexb, frames, ... }
+  // 或 AV1/VP9 路径的 { frames, obus/units, width, height, ... }
 }
+
+// 在共享对象上导出 (见 demux.js 末尾)：
+// H26xDemux.isNewFmt = isNewFmt;
+// H26xDemux.demuxNewFmt = demuxNewFmt;
+
+// app.js handleFile() — 在裸流兜底分支之前添加：
+// else if (H26xDemux.isNewFmt(rawBytes)) { ... }
 ```
 
 ---
@@ -836,50 +929,38 @@ class Demuxer {
 | 语法树显示异常/为空 | 右侧面板空白 | 1. 点击 NAL 列表不同行测试<br>2. 检查控制台 `hevc_get_nal_syntax` 返回值<br>3. 确认 NAL 索引未越界 |
 | 视频预览黑屏 | Preview 标签页无画面 | 1. 确认浏览器支持 WebCodecs (Chrome 94+, Firefox 110+)<br>2. VVC 需加载 vvdec WASM，检查网络面板<br>3. AV1 需加载 dav1d WASM<br>4. 尝试点击时间轴不同帧 |
 | HDR 信息不显示 | 底部面板为空 | 1. 确认码流包含 SEI: mastering_display_colour_volume / content_light_level_info<br>2. HEVC: VUI 中的 colour_description_present_flag=1<br>3. 点击对应 NAL (通常是 SPS/VPS) 查看语法树确认 |
+| YUV 自动猜测失败 | 设置面板显示 "size not divisible — set resolution/format" | 非常规尺寸属预期行为：手动输入 Width/Height/Format 后点击 Apply |
+| YUV 颜色异常 | 预览偏色/偏移 | 在 YUV 设置栏切换色彩矩阵 (BT.601 ↔ BT.709)；默认 full range |
+| YUV 点击 Play 无反应 | 播放按钮无效 | 符合设计：单帧模式——`.yuv` 文件按单帧处理 |
 
 ### 性能问题
 
 | 现象 | 优化建议 |
 |------|----------|
 | 大文件 (>500MB) 解析缓慢 | 1. 仅加载可见 NAL 范围 (虚拟滚动已实现)<br>2. 考虑分片解析 (Web Worker)<br>3. 启用 `ALLOW_MEMORY_GROWTH` |
-| 时间轴渲染卡顿 | 1. 减少 Canvas 重绘频率<br>2. 使用 OffscreenCanvas (Web Worker)<br>3. 简化帧绘制逻辑 |
+| 时间轴渲染卡顿 | 长流已实现缩放自动适配 + 离屏底图缓存；可进一步用 Worker + OffscreenCanvas |
 | 内存占用过高 | 1. 及时调用 `hevc_reset()` 释放解析器<br>2. 避免同时持有多个大文件数据<br>3. 使用 `URL.revokeObjectURL()` 释放 Blob URL |
+| 8K YUV 预览慢 | 已实现降采样预览 + WASM 转换；全分辨率转换延迟到放大镜打开 |
 
 ---
 
-## 性能优化建议
+## 性能优化
 
-### 1. 解析层面
+已实现的优化（代码中可验证）：
 
-- **增量解析**：大文件分块解析，配合 `process(data, size, offset)` 的 offset 参数
-- **并行化**：多线程解析不同 Layer/Temporal ID (需解析器支持)
-- **流式处理**：配合 `ReadableStream` 实现边下载边解析
+- **虚拟滚动**：NAL 列表仅渲染可见行
+- **YUV 降采样预览**：仅转换显示尺寸像素（8K 约 80 倍工作量削减）；全分辨率转换延迟到放大镜打开
+- **YUV LUT 转换 + WASM**：256 项查找表；优先 WASM `yuv_convert_planes`，JS 兜底
+- **Hex 视图 4KB 上限**：避免 YUV 帧渲染数十 MB HTML
+- **时间轴**：离屏底图缓存；长视频缩放自动适配与最小可点击帧宽
+- **ALLOW_MEMORY_GROWTH**：WASM 堆按需增长，支持大文件
 
-### 2. WASM 层面
+后续优化方向（尚未实现）：
 
-```bash
-# 优化编译选项
--s WASM=1 \
--s ALLOW_MEMORY_GROWTH=1 \
--s INITIAL_MEMORY=64MB \        # 根据典型文件大小调整
--s MAXIMUM_MEMORY=2GB \         # 设置上限
--s STACK_SIZE=5MB \             # 栈大小
--O3 \                           # 发布版用 O3
--flto \                         # 链接时优化
-```
-
-### 3. 前端渲染层面
-
-- **虚拟滚动**：NAL 列表仅渲染可视区域 (已实现)
-- **Canvas 离屏渲染**：时间轴用 `OffscreenCanvas` 移至 Worker
-- **防抖/节流**：窗口 resize、滚动事件防抖
-- **Web Worker**：语法树构建、Hex 视图生成移至 Worker
-
-### 4. 网络层面
-
-- **Range 请求**：大文件支持 HTTP Range 加载部分内容
-- **Service Worker**：缓存 WASM、JS、插件文件
-- **CDN 分发**：静态资源走 CDN
+- Web Worker 分片/并行解析
+- OffscreenCanvas 时间轴渲染移入 Worker
+- HTTP Range 请求 / Service Worker 缓存 / CDN 分发
+- emcc 参数调优 (`-O3` / `-flto` / `INITIAL_MEMORY`)
 
 ---
 
@@ -888,6 +969,7 @@ class Demuxer {
 | 版本 | 日期 | 变更摘要 |
 |------|------|----------|
 | v1.0.0 | 2024 | 初始版本：HEVC/AVC/VVC 解析、Web 界面、CLI、SEI 插件、HDR 支持 |
+| (HEAD) | 2026-09 | Raw YUV 支持（8 种格式、自动猜测+设置面板、BT.601/709、WASM 转换、放大镜+PNG 导出）；SEI 标签页；全编解码器帧放大镜；H.264 定制 frame-ts SEI；Hex 4KB 上限；GitHub/GitLab Pages CI |
 
 ---
 
