@@ -14,15 +14,20 @@ BitstreamReader::BitstreamReader(const uint8_t *ptr, std::size_t size):
 
 std::size_t BitstreamReader::available()
 {
+  if(m_posBase >= m_size)
+    return 0;
   return (m_size - m_posBase -1) * CHAR_BIT + m_posInBase + 1;
 }
 
 std::size_t BitstreamReader::availableInNalU()
 {
+  if(m_posBase >= m_size)
+    return 0;
+
   std::size_t pos = m_posBase;
   if(m_posInBase)
     pos++;
-  for(; pos<(m_size - 3); pos++)
+  for(; pos + 3 < m_size; pos++)
   {
     bool naluFinded = m_ptr[pos] == 0 && m_ptr[pos+1] == 0 && m_ptr[pos+2] == 1;
 
@@ -39,7 +44,8 @@ std::size_t BitstreamReader::availableInNalU()
 
   }
 
-  return m_size;
+  // 未找到起始码：返回 NAL 剩余位数（与起始码路径单位一致，均为 bit）
+  return (m_size - m_posBase - 1) * CHAR_BIT + m_posInBase + 1;
 }
 
 
@@ -57,7 +63,7 @@ bool BitstreamReader::getBit()
     m_posInBase = CHAR_BIT-1;
     m_posBase++;
 
-    if(m_posBase >= 2)
+    if(m_posBase >= 2 && m_posBase < m_size)
     {
       if(m_ptr[m_posBase - 2] == 0 && m_ptr[m_posBase - 1] == 0 && m_ptr[m_posBase] == 3)
         m_posBase++;
@@ -83,7 +89,7 @@ uint32_t BitstreamReader::getBits(std::size_t num)
 
 void BitstreamReader::skipBits(std::size_t num)
 {
-  if(m_posBase >= 2)
+  if(m_posBase >= 2 && m_posBase < m_size)
   {
     if(m_ptr[m_posBase - 2] == 0 && m_ptr[m_posBase - 1] == 0 && m_ptr[m_posBase] == 3)
       m_posBase++;
@@ -92,15 +98,22 @@ void BitstreamReader::skipBits(std::size_t num)
   uint32_t scipBytes = num / 8;
 
 
-  while(scipBytes)
+  while(scipBytes && m_posBase < m_size)
   {
     scipBytes--;
     m_posBase++;
-    if(m_posBase >= 2)
+    if(m_posBase >= 2 && m_posBase < m_size)
     {
       if(m_ptr[m_posBase - 2] == 0 && m_ptr[m_posBase - 1] == 0 && m_ptr[m_posBase] == 3)
         m_posBase++;
     }
+  }
+
+  // 已到 NAL 末尾：耗尽读指针（后续 getBit 抛出、available*() 返回 0）
+  if(m_posBase >= m_size)
+  {
+    m_posInBase = CHAR_BIT - 1;
+    return;
   }
 
   if(m_posInBase > num % 8)

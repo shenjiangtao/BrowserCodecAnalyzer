@@ -142,7 +142,7 @@ make native
 |------|------|
 | `make` / `make all` | 默认构建 native |
 | `make native` | 构建原生可执行文件 `hevcparser_native` |
-| `make wasm` | 构建 Web 版本（源文件、include 路径与 emcc 参数与 `./build.sh` 一致） |
+| `make wasm` | 构建 Web 版本 — 与 `./build.sh` 完全一致（源文件、emcc 参数、打包） |
 | `make clean` | 清理所有构建产物 |
 
 ### 方式三：CI / Pages 自动部署

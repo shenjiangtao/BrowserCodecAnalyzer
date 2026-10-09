@@ -142,7 +142,7 @@ make native
 |--------|-------------|
 | `make` / `make all` | Default builds native |
 | `make native` | Build native executable `hevcparser_native` |
-| `make wasm` | Build web version (same sources, include paths and emcc flags as `./build.sh`) |
+| `make wasm` | Build web version — identical to `./build.sh` (sources, emcc flags and packaging) |
 | `make clean` | Clean all build artifacts |
 
 ### Method 3: CI / Pages Deployment

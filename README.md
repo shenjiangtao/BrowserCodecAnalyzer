@@ -63,9 +63,9 @@ python3 -m http.server -d dist 8000
 ```
 
 > **注意 / Note**: `./build.sh` 为标准构建入口（CI 使用）；`make wasm` 与其
-> 参数一致，亦可使用。
-> `./build.sh` is the canonical web build (used by CI); `make wasm` builds
-> the same thing with identical flags.
+> 产物完全一致（源文件、flags、打包均相同），亦可使用。
+> `./build.sh` is the canonical web build (used by CI); `make wasm` produces
+> the identical artifact (sources, flags and packaging).
 
 ### 原生命令行 / Native CLI
 

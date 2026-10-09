@@ -327,6 +327,18 @@ void HevcParserImpl::processSliceHeader(std::shared_ptr<Slice> pslice, Bitstream
 
         pslice -> num_long_term_pics = bs.getGolombU();
 
+        // 防 DoS/溢出：num_long_term_sps 不应超过 SPS 声明的数量，
+        // 且两者之和受规范约束（各 ≤32，合计 ≤64）；损坏码流直接判定该 slice 失败
+        if(pslice -> num_long_term_sps > m_spsMap[spsId] -> num_long_term_ref_pics_sps ||
+           (std::size_t)pslice -> num_long_term_sps + pslice -> num_long_term_pics > 64)
+        {
+          onWarning("Slice: num_long_term_sps/num_long_term_pics out of range", &info, Parser::OUT_OF_RANGE);
+
+          pslice -> m_processFailed = true;
+
+          return;
+        }
+
         std::size_t num_long_term = pslice -> num_long_term_sps + pslice -> num_long_term_pics;
 
         pslice -> lt_idx_sps.resize(num_long_term);
@@ -722,7 +734,7 @@ void HevcParserImpl::processSEI(std::shared_ptr<SEI> psei, BitstreamReader &bs, 
     }
     payloadSize += msg.last_payload_size_byte;
 
-    if(payloadSize > bs.availableInNalU())
+    if(payloadSize > bs.availableInNalU() / 8)
     {
       std::stringstream ss;
       ss << "SEI: sei message payload size more then nal unit size (payloadSize="
@@ -969,7 +981,7 @@ void HevcParserImpl::processSEI(std::shared_ptr<SEI> psei, BitstreamReader &bs, 
       }
     }
 
-    bs.skipBits(payloadSize * 8);
+    bs.skipBits((std::size_t)payloadSize * 8);
 
     psei -> sei_message.push_back(msg);
   }

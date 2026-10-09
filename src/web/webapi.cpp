@@ -3,6 +3,7 @@
 #include "AvcWebParser.h"
 #include "VvcWebParser.h"
 #include "CodecDetector.h"
+#include "Json.h"
 #include "YuvConvert.h"
 
 #include <HevcParser.h>
@@ -78,7 +79,7 @@ extern "C"
     }
     catch(const std::exception &err)
     {
-      return dupString(std::string("{\"error\":\"") + err.what() + "\"}");
+      return dupString(std::string("{\"error\":\"") + web::jsonEscape(err.what()) + "\"}");
     }
     catch(...)
     {
@@ -124,7 +125,7 @@ extern "C"
     }
     catch(const std::exception &err)
     {
-      return dupString(std::string("{\"error\":\"") + err.what() + "\"}");
+      return dupString(std::string("{\"error\":\"") + web::jsonEscape(err.what()) + "\"}");
     }
     catch(...)
     {
@@ -168,7 +169,7 @@ extern "C"
     }
     catch(const std::exception &err)
     {
-      return dupString(std::string("{\"error\":\"") + err.what() + "\"}");
+      return dupString(std::string("{\"error\":\"") + web::jsonEscape(err.what()) + "\"}");
     }
     catch(...)
     {

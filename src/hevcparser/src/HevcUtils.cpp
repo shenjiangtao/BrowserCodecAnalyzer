@@ -38,14 +38,20 @@ uint32_t HEVC::calcNumPocTotalCurr(std::shared_ptr<HEVC::Slice> pslice, std::sha
   std::size_t NumPocTotalCurr = 0;
   std::size_t currRpsIdx;
 
-  bool UsedByCurrPicLt[16];
+  // num_long_term 可能来自损坏码流的无界 Golomb 值（解析层已限制 ≤64，此处再做防御）：
+  // 用动态数组替代固定 [16] 栈数组，并对两个下标做边界检查
   std::size_t num_long_term = pslice -> num_long_term_sps + pslice -> num_long_term_pics;
+  std::vector<char> UsedByCurrPicLt(num_long_term, 0);
 
   for(std::size_t i=0; i < num_long_term; i++)
   {
     if (i < pslice -> num_long_term_sps)
-      UsedByCurrPicLt[i] = psps -> used_by_curr_pic_lt_sps_flag[pslice -> lt_idx_sps[i]];
-    else
+    {
+      if (i < pslice -> lt_idx_sps.size() &&
+          pslice -> lt_idx_sps[i] < psps -> used_by_curr_pic_lt_sps_flag.size())
+        UsedByCurrPicLt[i] = psps -> used_by_curr_pic_lt_sps_flag[pslice -> lt_idx_sps[i]];
+    }
+    else if (i < pslice -> used_by_curr_pic_lt_flag.size())
       UsedByCurrPicLt[i] = pslice -> used_by_curr_pic_lt_flag[i];
   }
 

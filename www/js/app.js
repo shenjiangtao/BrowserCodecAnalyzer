@@ -13,6 +13,8 @@
   var currentHeicRawBytes = null;  // HEIC 原始字节（用于 libheif 解码）
   var currentYuv = null;           // YUV raw 设置（width/height/format/fps/matrix/frameSize/frames）
   var selectedIndex = -1;
+  var lastWasmParse = null;        // 最近一次 WASM 解析的编解码器（"avc"/"hevc"/"vvc"），用于 clearAll 时释放 WASM 侧解析树
+  var MAX_FILE_SIZE = 512 * 1024 * 1024; // Web UI 文件大小上限（峰值内存约为文件 2.5-3.5 倍）
 
   var statusEl = document.getElementById("status");
   var fileInput = document.getElementById("fileInput");
@@ -77,6 +79,7 @@
 
   // ---------- WASM 封装 ----------
   function parseBuffer(bytes, hintCodec) {
+    if (!Module) throw new Error("parser module is still loading, please try again in a few seconds");
     var ptr = Module._malloc(bytes.length);
     Module.HEAPU8.set(bytes, ptr);
 
@@ -98,6 +101,7 @@
 
     var data = JSON.parse(json);
     if (data.error) throw new Error(data.error);
+    if (codec === "avc" || codec === "vvc" || codec === "hevc") lastWasmParse = codec;
     return { codec: codec, data: data };
   }
 
@@ -818,7 +822,7 @@
       }
       out += '<span class="hex-offset">' + hex8(i) + "</span>  " +
              '<span class="hex-byte">' + lineHex + "</span>" +
-             '<span class="hex-ascii">|' + lineAscii + "|</span>\n";
+             '<span class="hex-ascii">|' + escapeHtml(lineAscii) + "|</span>\n";
     }
     if (truncated) out += "... (truncated: showing first " + HEX_MAX_BYTES + " of " + nal.length + " bytes)\n";
     hexView.innerHTML = out;
@@ -2571,6 +2575,17 @@ timeline.addEventListener("click", function (e) {
     if (play.decoder) { try { play.decoder.close(); } catch (e) {} play.decoder = null; }
     for (var k in play.frames) { try { play.frames[k].close(); } catch (e) {} }
     play.frames = {};
+
+    // 释放 WASM 侧上一次解析持有的解析树（WebParser 保存全部 NAL 的 shared_ptr，
+    // 不释放则三套编解码器的树会常驻 WASM 堆直到刷新页面）
+    if (Module && lastWasmParse) {
+      try {
+        if (lastWasmParse === "avc") Module._avc_reset();
+        else if (lastWasmParse === "vvc") Module._vvc_reset();
+        else if (lastWasmParse === "hevc") Module._hevc_reset();
+      } catch (eReset) {}
+      lastWasmParse = null;
+    }
     play.feedFrame = -1;
     play.params = [];
     play.curFrame = -1;
@@ -2644,11 +2659,19 @@ timeline.addEventListener("click", function (e) {
 
   function handleFile(file) {
     if (!file) return;
+    if (file.size > MAX_FILE_SIZE) {
+      setStatus("File too large (" + (file.size / 1024 / 1024).toFixed(0) + " MB). " +
+                "The web UI supports files up to " + (MAX_FILE_SIZE / 1024 / 1024) + " MB — use the native CLI for very large streams.");
+      return;
+    }
     clearAll();
     setStatus("Parsing " + file.name + " ...");
     fileNameEl.textContent = file.name + " (" + (file.size / 1024 / 1024).toFixed(2) + " MB)";
 
     var reader = new FileReader();
+    reader.onerror = function () {
+      setStatus("Could not read file: " + (file && file.name ? file.name : "unknown") + " (FileReader error)");
+    };
     reader.onload = function (e) {
       var rawBytes = new Uint8Array(e.target.result);
       try {

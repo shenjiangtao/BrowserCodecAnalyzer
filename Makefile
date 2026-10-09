@@ -38,8 +38,7 @@ wasm:
 	  -s MODULARIZE=1 \
 	  -s EXPORT_NAME=createHevcModule \
 	  -o dist/hevc.js
-	cp www/index.html www/css/style.css dist/ 2>/dev/null || true
-	cp -r www/js dist/ 2>/dev/null || true
+	cp -r www/index.html www/css www/js dist/
 
 clean:
 	rm -f $(NATIVE_OBJ) hevcparser_native

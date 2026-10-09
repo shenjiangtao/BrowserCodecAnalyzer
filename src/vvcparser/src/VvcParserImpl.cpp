@@ -631,8 +631,15 @@ namespace VVC
     {
       uint32_t vuiPayloadSize = bs.getGolombU();
       s.sps_vui_payload_size_minus1 = vuiPayloadSize;
+      // 防 DoS：vui_payload_size 是无界 Golomb 值，跳过前校验剩余位数
+      std::size_t vuiSkipBits = ((std::size_t)vuiPayloadSize + 1) * 8;
+      if(vuiSkipBits > bs.available())
+      {
+        p -> m_processFailed = true;
+        return;
+      }
       // 跳过 VUI payload（字节对齐）
-      bs.skipBits((vuiPayloadSize + 1) * 8);
+      bs.skipBits(vuiSkipBits);
     }
     s.sps_extension_flag = bs.getBit();
   }
