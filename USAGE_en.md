@@ -133,7 +133,8 @@ make native
 
 # Artifact: hevcparser_native (executable)
 ./hevcparser_native --help
-# Usage: hevcparser_native <input> [nal_index]
+# Usage: hevcparser_native <input> [codec|nal_index] [nal_index]
+#   --help / -h  print full usage and exit 0
 ```
 
 #### Makefile Targets

@@ -1,5 +1,6 @@
 CXX ?= clang++
 CXXFLAGS ?= -std=c++11 -O2 -Wall
+DEPFLAGS = -MMD -MP
 EMCC ?= em++
 
 INC := -Isrc/hevcparser/include -Isrc/hevcparser/src -Isrc/h264parser/include -Isrc/h264parser/src -Isrc/vvcparser/include -Isrc/vvcparser/src -Isrc/common -Isrc/web -Isrc/yuv
@@ -24,7 +25,10 @@ hevcparser_native: $(NATIVE_OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(INC) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) $(INC) -c -o $@ $<
+
+# 头文件依赖（-MMD -MP 生成）：改 .h 也会触发正确重编译
+-include $(NATIVE_OBJ:.o=.d)
 
 wasm:
 	mkdir -p dist
@@ -41,5 +45,5 @@ wasm:
 	cp -r www/index.html www/css www/js dist/
 
 clean:
-	rm -f $(NATIVE_OBJ) hevcparser_native
+	rm -f $(NATIVE_OBJ) $(NATIVE_OBJ:.o=.d) hevcparser_native
 	rm -rf dist

@@ -203,6 +203,13 @@
           <li>Video decode: WebCodecs (H.264/H.265/VP9) + vvdec WASM (H.266) + dav1d WASM (AV1)</li>
           <li>Image decode: libheif WASM (HEIC) + dav1d WASM (AVIF) + browser-native (JPEG/PNG/…)</li>
         </ul>
+        <div id="lastErrorBox" class="last-error hidden">
+          <h4>Last Error</h4>
+          <div class="last-error-row">
+            <pre id="lastErrorText">(none)</pre>
+            <button id="lastErrorCopy" class="btn btn-secondary btn-small">Copy</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>

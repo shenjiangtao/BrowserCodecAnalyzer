@@ -201,6 +201,23 @@ body { display: flex; flex-direction: column; }
 .modal-body li { margin: 3px 0; }
 .modal-body a { color: var(--accent-text); }
 
+/* Last Error（Help 模态框，全局错误捕获显示区） */
+.last-error {
+  margin-top: 14px;
+  border: 1px solid rgba(240, 97, 109, 0.35);
+  background: rgba(240, 97, 109, 0.08);
+  border-radius: var(--r-sm);
+  padding: 10px 12px 12px;
+}
+.last-error h4 { color: var(--danger); }
+.last-error-row { display: flex; align-items: flex-start; gap: 8px; }
+.last-error-row pre {
+  flex: 1 1 auto; margin: 0;
+  font: 11px var(--font-mono);
+  white-space: pre-wrap; word-break: break-all;
+  color: var(--text); max-height: 180px; overflow: auto;
+}
+
 .frame-modal-box { width: min(92vw, calc(100vw - 48px)); max-height: 92vh; }
 .frame-modal-actions { display: flex; gap: 6px; align-items: center; }
 .frame-modal-actions .btn-small.active { background: linear-gradient(180deg, var(--accent), var(--accent-deep)); color: #fff; border-color: rgba(255,255,255,.1); }

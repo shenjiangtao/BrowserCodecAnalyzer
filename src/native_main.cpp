@@ -25,8 +25,25 @@ int main(int argc, char **argv)
 {
   if(argc < 2)
   {
-    std::cerr << "Usage: " << argv[0] << " <input> [nal_index]" << std::endl;
+    std::cerr << "Usage: " << argv[0] << " <input> [codec|nal_index] [nal_index]  (try --help)" << std::endl;
     return 1;
+  }
+
+  if(std::string(argv[1]) == "-h" || std::string(argv[1]) == "--help")
+  {
+    std::cout << "BrowserCodecAnalyzer CLI — raw bitstream parser (H.264/H.265/H.266)\n"
+              << "\nUsage: " << argv[0] << " <input> [codec|nal_index] [nal_index]\n"
+              << "\nArguments:\n"
+              << "  input       Input file (raw Annex-B bitstream)\n"
+              << "  codec       Force codec: avc | hevc | vvc (auto-detected when omitted)\n"
+              << "  nal_index   Print the syntax tree of the NAL unit at this index\n"
+              << "\nExamples:\n"
+              << "  " << argv[0] << " video.hevc\n"
+              << "  " << argv[0] << " video.h264 avc\n"
+              << "  " << argv[0] << " video.266 vvc 5\n"
+              << "\nContainers/images/raw-YUV are Web UI only. Exit codes: 0 ok, 1 usage,\n"
+              << "2 file open failed, 3 parse failed.\n";
+    return 0;
   }
 
   std::ifstream in(argv[1], std::ios_base::binary);

@@ -3091,6 +3091,51 @@ computeFrames();
     return setView;
   }
 
+  // ---------- 全局错误捕获 ----------
+  // 任何未捕获的脚本错误 / Promise 拒绝都路由到状态栏，
+  // 并保存到 Help 模态框的 "Last Error" 区块（可复制），便于用户报障
+  var lastErrorDetails = null;
+  function recordError(message, detail) {
+    lastErrorDetails = {
+      time: new Date().toLocaleTimeString(),
+      message: String(message || "unknown error"),
+      detail: String(detail || "")
+    };
+    try {
+      var box = document.getElementById("lastErrorBox");
+      if (box) box.classList.remove("hidden");
+      var txt = document.getElementById("lastErrorText");
+      if (txt)
+        txt.textContent = "[" + lastErrorDetails.time + "] " + lastErrorDetails.message +
+                          (lastErrorDetails.detail ? "\n" + lastErrorDetails.detail : "");
+    } catch (eDom) {}
+    setStatus("Unexpected error: " + lastErrorDetails.message + " — details in ? Help");
+  }
+
+  window.addEventListener("error", function (e) {
+    recordError(e.message || "unknown script error",
+                e.error && e.error.stack ? e.error.stack :
+                (e.filename ? (e.filename + ":" + e.lineno) : ""));
+  });
+
+  window.addEventListener("unhandledrejection", function (e) {
+    var r = e.reason;
+    recordError(r && r.message ? r.message : String(r),
+                r && r.stack ? r.stack : "unhandled promise rejection");
+  });
+
+  var lastErrorCopyBtn = document.getElementById("lastErrorCopy");
+  if (lastErrorCopyBtn) {
+    lastErrorCopyBtn.addEventListener("click", function () {
+      var txt = document.getElementById("lastErrorText");
+      if (!txt || !navigator.clipboard || !navigator.clipboard.writeText) return;
+      navigator.clipboard.writeText(txt.textContent).then(function () {
+        lastErrorCopyBtn.textContent = "Copied";
+        setTimeout(function () { lastErrorCopyBtn.textContent = "Copy"; }, 1500);
+      });
+    });
+  }
+
   function boot() {
     makeSplitterCol("splitMainCol", mainArea);
     makeSplitterCol("splitBottomCol", bottomPanels);

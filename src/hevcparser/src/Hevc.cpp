@@ -5,8 +5,8 @@
 using namespace HEVC;
 
 NALUnit::NALUnit(NALHeader header):
-  m_nalHeader(header)
-  ,m_processFailed(false)
+  m_processFailed(false)
+  ,m_nalHeader(header)
 {
 }
 
@@ -807,7 +807,7 @@ bool ScalingListData::operator == (const ScalingListData &obj) const
   if(scaling_list_dc_coef_minus8 != obj.scaling_list_dc_coef_minus8)
     return false;
 
-    if(scaling_list_delta_coef != obj.scaling_list_delta_coef)
+  if(scaling_list_delta_coef != obj.scaling_list_delta_coef)
     return false;
 
   return true;

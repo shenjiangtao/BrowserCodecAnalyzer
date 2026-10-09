@@ -133,7 +133,8 @@ make native
 
 # 产物：hevcparser_native (可执行文件)
 ./hevcparser_native --help
-# Usage: hevcparser_native <input> [nal_index]
+# Usage: hevcparser_native <input> [codec|nal_index] [nal_index]
+#   --help / -h  打印完整用法并以 0 退出
 ```
 
 #### Makefile 目标

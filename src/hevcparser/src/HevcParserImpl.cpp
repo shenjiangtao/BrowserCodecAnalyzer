@@ -266,8 +266,8 @@ void HevcParserImpl::processSliceHeader(std::shared_ptr<Slice> pslice, Bitstream
     if(m_spsMap[spsId] -> pic_height_in_luma_samples % CtbSizeY)
       PicHeightInCtbsY++;
 
-    int32_t sliceAddrLength = HEVC::log2(PicHeightInCtbsY * PicWidthInCtbsY);
-    if((1 << sliceAddrLength) < PicHeightInCtbsY * PicWidthInCtbsY)
+    uint32_t sliceAddrLength = HEVC::log2(PicHeightInCtbsY * PicWidthInCtbsY);
+    if((1u << sliceAddrLength) < PicHeightInCtbsY * PicWidthInCtbsY)
       sliceAddrLength++;
 
      pslice -> slice_segment_address = bs.getBits(sliceAddrLength);
@@ -310,7 +310,7 @@ void HevcParserImpl::processSliceHeader(std::shared_ptr<Slice> pslice, Bitstream
       else if(m_spsMap[spsId] -> num_short_term_ref_pic_sets > 1)
       {
         std::size_t numBits = HEVC::log2(m_spsMap[spsId] -> num_short_term_ref_pic_sets);
-        if(1 << numBits < m_spsMap[spsId] -> num_short_term_ref_pic_sets)
+        if((1u << numBits) < m_spsMap[spsId] -> num_short_term_ref_pic_sets)
           numBits++;
 
         if(numBits > 0)
@@ -415,15 +415,15 @@ void HevcParserImpl::processSliceHeader(std::shared_ptr<Slice> pslice, Bitstream
         if(pslice -> slice_type == SLICE_B)
           pslice -> collocated_from_l0_flag = bs.getBits(1);
 
-        if(pslice -> collocated_from_l0_flag && pslice -> num_ref_idx_l0_active_minus1 ||
-            !pslice -> collocated_from_l0_flag && pslice -> num_ref_idx_l1_active_minus1)
+        if((pslice -> collocated_from_l0_flag && pslice -> num_ref_idx_l0_active_minus1) ||
+            (!pslice -> collocated_from_l0_flag && pslice -> num_ref_idx_l1_active_minus1))
         {
           pslice -> collocated_ref_idx = bs.getGolombU();
         }
       }
 
-      if(ppps -> weighted_pred_flag && pslice -> slice_type == SLICE_P ||
-        ppps -> weighted_bipred_flag && pslice -> slice_type == SLICE_B)
+      if((ppps -> weighted_pred_flag && pslice -> slice_type == SLICE_P) ||
+        (ppps -> weighted_bipred_flag && pslice -> slice_type == SLICE_B))
       {
         pslice -> pred_weight_table = processPredWeightTable(bs, pslice);
 
@@ -1510,7 +1510,6 @@ ScalingListData HevcParserImpl::processScalingListData(BitstreamReader &bs)
         sc.scaling_list_pred_matrix_id_delta[sizeId][matrixId] = bs.getGolombU();
       else
       {
-        std::size_t nextCoef = 8;
         std::size_t coefNum = std::min(64, (1 << (4 + (sizeId << 1))));
         if(sizeId > 1)
           sc.scaling_list_dc_coef_minus8[sizeId-2][matrixId] = bs.getGolombS();
@@ -1547,9 +1546,9 @@ RefPicListModification HevcParserImpl::processRefPicListModification(BitstreamRe
   }
 
   std::size_t numPocTotalCurr = calcNumPocTotalCurr(pslice, m_spsMap[spsId]);
-  int32_t listSize = HEVC::log2(numPocTotalCurr);
+  uint32_t listSize = HEVC::log2(numPocTotalCurr);
 
-  if((1 << listSize) < numPocTotalCurr)
+  if((1u << listSize) < numPocTotalCurr)
     listSize++;
 
 
@@ -1983,7 +1982,7 @@ void HevcParserImpl::processToneMapping(std::shared_ptr<ToneMapping> pSeiPayload
       std::size_t start_of_coded_interval_length = ((pSeiPayload->coded_data_bit_depth + 7)>>3)<<3;
 
       pSeiPayload -> start_of_coded_interval.resize(1 << pSeiPayload->target_bit_depth);
-      for(std::size_t i = 0; i<(1 << pSeiPayload->target_bit_depth); i++)
+      for(std::size_t i = 0; i < (std::size_t)(1 << pSeiPayload->target_bit_depth); i++)
       {
         pSeiPayload -> start_of_coded_interval[i] = bs.getBits(start_of_coded_interval_length);
       }

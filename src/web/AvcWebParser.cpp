@@ -434,7 +434,6 @@ namespace web
     out += ",\"hdr\":{";
     int cp = 2, tc = 2, mc = 2;
     int fullRange = 0;
-    bool hasColor = false;
     if(m_lastSPS && m_lastSPS->sps.vui_parameters_present_flag &&
        m_lastSPS->sps.vui_parameters.video_signal_type_present_flag)
     {
@@ -444,7 +443,6 @@ namespace web
         cp = m_lastSPS->sps.vui_parameters.colour_primaries;
         tc = m_lastSPS->sps.vui_parameters.transfer_characteristics;
         mc = m_lastSPS->sps.vui_parameters.matrix_coefficients;
-        hasColor = true;
       }
     }
     out += "\"colourPrimaries\":\"" + jsonEscape(colourPrimariesToString(cp)) + "\"";
