@@ -35,6 +35,7 @@ wasm:
 	$(EMCC) $(PARSER_SRC) $(AVC_SRC) $(VVC_SRC) $(COMMON_SRC) $(WEB_SRC) $(YUV_SRC) \
 	  $(INC) \
 	  -std=c++11 -O2 \
+  -fwasm-exceptions \
 	  -s WASM=1 \
 	  -s ALLOW_MEMORY_GROWTH=1 \
 	  -s EXPORTED_FUNCTIONS='["_hevc_parse","_hevc_get_nal_syntax","_hevc_reset","_avc_parse","_avc_get_nal_syntax","_avc_reset","_vvc_parse","_vvc_get_nal_syntax","_vvc_reset","_detect_codec","_hevc_free","_yuv_convert_planes","_malloc","_free"]' \

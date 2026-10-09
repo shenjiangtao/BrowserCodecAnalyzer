@@ -31,6 +31,7 @@ BrowserCodecAnalyzer is a **bitstream analyzer** for video codec engineers, supp
 | **SEI 消息表** | SEI Tab | 全流 SEI 汇总表：NAL 编号、偏移、Payload 类型/大小/可读内容、帧时间戳；点击行定位 NAL |
 | **十六进制视图** | Hex View | 原始字节十六进制+ASCII（超过 4KB 截断显示 / capped at 4KB per NAL） |
 | **帧结构时间线** | Frame Timeline | I/P/B 帧着色，+/- 按钮缩放，\|◀/▶\| 逐帧步进，点击预览 |
+| **后台解析 Worker** | Background Parse Worker | WASM 解析运行于 Web Worker，大文件不冻结 UI；file:// 等不支持 Worker 的场景自动回退页内同步模式 |
 | **视频预览** | Video Preview | WebCodecs (H.264/H.265/VP9) + vvdec WASM (H.266) + dav1d WASM (AV1)；支持播放/逐帧/解码序-显示序切换 |
 | **帧放大镜** | Frame Lightbox | 点击预览画布 → 全分辨率弹窗（Fit / 100%），可无损导出 PNG（所有编解码器及 YUV） |
 | **合规性告警** | Conformance Warnings | 越界、参考结构缺失、Profile 一致性，可按类型筛选 |
@@ -130,6 +131,7 @@ BrowserCodecAnalyzer/
 │   ├── css/style.css     # 样式 / Styles
 │   ├── js/               # 前端逻辑 / Frontend logic
 │   │   ├── app.js        # 主应用 / Main app (UI, timeline, preview, tabs)
+│   │   ├── parser-worker.js  # 解析 Worker（WASM 后台线程 / background parser worker）
 │   │   ├── demux.js      # 容器解复用 (MP4/fMP4/WebM/IVF/TS/AVIF/HEIC)
 │   │   ├── yuv.js        # YUV 格式表/猜测/转换 (JS 路径) / YUV guess & convert
 │   │   ├── plugin.js     # SEI 插件系统 / SEI plugin system

@@ -77,9 +77,130 @@
   function setStatus(msg) { statusEl.textContent = msg; }
   function hex8(v) { var s = v.toString(16); while (s.length < 8) s = "0" + s; return "0x" + s; }
 
-  // ---------- WASM 封装 ----------
+  // ---------- 解析 Worker（WASM 在后台线程；file:// 等不支持 Worker 的场景自动回退页内同步模式） ----------
+  var parserWorker = null;
+  var parserMode = null;        // "worker" | "sync" | null（未就绪）
+  var workerReqs = {};
+  var workerReqSeq = 0;
+
+  function workerPost(msg, transfer) {
+    if (transfer && transfer.length) parserWorker.postMessage(msg, transfer);
+    else parserWorker.postMessage(msg);
+  }
+
+  function workerRequest(payload, transfer) {
+    return new Promise(function (resolve, reject) {
+      if (!parserWorker || parserMode !== "worker") { reject(new Error("parser worker not available")); return; }
+      var id = ++workerReqSeq;
+      payload.id = id;
+      workerReqs[id] = { resolve: resolve, reject: reject };
+      workerPost(payload, transfer);
+    });
+  }
+
+  function workerParse(bytes, hintCodec) {
+    return workerRequest({ type: "parse", bytes: bytes, hint: hintCodec || null }, [bytes.buffer]).then(function (r) {
+      var data = JSON.parse(r.json);
+      if (data.error) throw new Error(data.error);
+      return { codec: r.codec, data: data };
+    });
+  }
+
+  function workerNalSyntax(codec, index) {
+    return workerRequest({ type: "nalSyntax", codec: codec, index: index }).then(function (r) {
+      return JSON.parse(r.json);
+    });
+  }
+
+  function workerYuvConvert(y, u, v, w, h, fmtIdx, matrix, fullRange) {
+    return workerRequest({ type: "yuvConvert", y: y, u: u, v: v, w: w, h: h, fmtIdx: fmtIdx, matrix: matrix, fullRange: fullRange });
+  }
+
+  function enterSyncParserMode(reason, onReady) {
+    if (parserMode === "sync") return;
+    parserMode = "sync";
+    var s = document.createElement("script");
+    s.src = "hevc.js";
+    s.onload = function () {
+      if (typeof createHevcModule !== "function") {
+        setStatus("Error: hevc.js loaded but factory missing" + (reason ? " (" + reason + ")" : ""));
+        recordError("hevc.js factory missing", reason);
+        return;
+      }
+      createHevcModule().then(function (m) {
+        Module = m;
+        setStatus("Parser ready (in-page mode). " + (reason || ""));
+        if (onReady) onReady("sync");
+      }).catch(function (err) {
+        setStatus("Failed to load parser module: " + (err && err.message ? err.message : err));
+        recordError("parser module init failed", err && err.stack ? err.stack : String(err));
+      });
+    };
+    s.onerror = function () {
+      setStatus("Error: hevc.js not found (build first: ./build.sh)");
+    };
+    document.head.appendChild(s);
+  }
+
+  function initParserWorker(onReady) {
+    var w = null;
+    try { w = new Worker("js/parser-worker.js"); }
+    catch (eW) { w = null; }
+    if (!w) { enterSyncParserMode("Worker unavailable (opened via file://?) — using in-page parser", onReady); return; }
+    parserWorker = w;
+    var wakedUp = false;
+    var giveUp = setTimeout(function () {
+      if (wakedUp) return;
+      try { w.terminate(); } catch (eT) {}
+      parserWorker = null;
+      enterSyncParserMode("Parser worker startup timed out — using in-page parser", onReady);
+    }, 8000);
+    w.onmessage = function (ev) {
+      var m = ev.data;
+      if (m.type === "ready") {
+        wakedUp = true;
+        clearTimeout(giveUp);
+        parserMode = "worker";
+        setStatus("Parser ready (background worker). Open or drop a bitstream file.");
+        if (onReady) onReady("worker");
+        return;
+      }
+      if (m.type === "initError") {
+        wakedUp = true;
+        clearTimeout(giveUp);
+        try { w.terminate(); } catch (eT) {}
+        parserWorker = null;
+        enterSyncParserMode("Parser worker failed to start (" + m.message + ") — using in-page parser", onReady);
+        return;
+      }
+      if (m.type === "resetDone") return;
+      var slot = m.id !== undefined ? workerReqs[m.id] : null;
+      if (!slot) return;
+      delete workerReqs[m.id];
+      if (m.error) slot.reject(new Error(m.error));
+      else slot.resolve(m);
+    };
+    w.onerror = function () {
+      if (wakedUp) return;
+      wakedUp = true;
+      clearTimeout(giveUp);
+      try { w.terminate(); } catch (eT) {}
+      parserWorker = null;
+      enterSyncParserMode("Parser worker crashed — using in-page parser", onReady);
+    };
+  }
+
+  // ---------- WASM 封装（双模式：worker / 页内同步） ----------
   function parseBuffer(bytes, hintCodec) {
+    if (parserMode === "worker") {
+      // 主线程需保留 fileBytes 供 Hex/SEI/插件使用 → 复制一份 transfer 给 worker
+      return workerParse(bytes.slice(), hintCodec);
+    }
     if (!Module) throw new Error("parser module is still loading, please try again in a few seconds");
+    return Promise.resolve(parseSyncWasm(bytes, hintCodec));
+  }
+
+  function parseSyncWasm(bytes, hintCodec) {
     var ptr = Module._malloc(bytes.length);
     Module.HEAPU8.set(bytes, ptr);
 
@@ -106,6 +227,12 @@
   }
 
   function fetchNalSyntax(index) {
+    if (parserMode === "worker") return workerNalSyntax(currentCodec, index);
+    if (!Module) return Promise.reject(new Error("parser module is still loading"));
+    return Promise.resolve(fetchNalSyntaxSync(index));
+  }
+
+  function fetchNalSyntaxSync(index) {
     var outPtr;
     if (currentCodec === "avc") outPtr = Module._avc_get_nal_syntax(index);
     else if (currentCodec === "vvc") outPtr = Module._vvc_get_nal_syntax(index);
@@ -486,8 +613,20 @@
     }
     return currentFullFrame;
   }
-  // YUV 转换：优先 WASM（Module._yuv_convert_planes，emsdk 编译），否则 JS fallback
-  function yuvConvertPlanes(dw, dh, format, planes, matrix, fullRange) {
+  // YUV 转换：优先 WASM（worker 或页内 Module），否则 JS fallback；结果经 cb 回调
+  function yuvConvertPlanes(dw, dh, format, planes, matrix, fullRange, cb) {
+    var fmtIdx = YuvParser.FORMAT_ORDER.indexOf(format);
+    if (parserMode === "worker" && fmtIdx >= 0) {
+      workerYuvConvert(planes.y, planes.u, planes.v, dw, dh, fmtIdx,
+                       matrix === "bt709" ? 1 : 0, fullRange ? 1 : 0)
+        .then(function (r) { cb(r.rgba ? r.rgba : null); })
+        .catch(function () { cb(null); });
+      return;
+    }
+    cb(yuvConvertSync(dw, dh, format, planes, matrix, fullRange));
+  }
+
+  function yuvConvertSync(dw, dh, format, planes, matrix, fullRange) {
     if (typeof Module !== "undefined" && Module && Module._yuv_convert_planes) {
       var idx = YuvParser.FORMAT_ORDER.indexOf(format);
       if (idx >= 0) {
@@ -528,31 +667,37 @@
     var scale = Math.min(1, maxW / w, maxH / h);
     var dw = Math.max(1, Math.round(w * scale)), dh = Math.max(1, Math.round(h * scale));
     var small = (scale < 1) ? YuvParser.subsamplePlanes(planes, w, h, yu.format, dw, dh) : planes;
-    var rgba = yuvConvertPlanes(dw, dh, yu.format, small, yu.colorMatrix, yu.fullRange);
-    c.width = dw;
-    c.height = dh;
-    previewCanvasTouched = true;
-    var ctx = c.getContext("2d");
-    ctx.putImageData(new ImageData(rgba, dw, dh), 0, 0);
-    // 全分辨率转换延迟到放大查看时（openFrameModal 按需构建）
-    currentFullFrame = null;
-    var ts = (frameIndex / yu.fps).toFixed(3);
-    previewHint.textContent = "Frame " + frameIndex + " / POC " + frameIndex + " · " + ts + "s" + (yu.mtime ? " · captured " + yu.mtime : "");
-    previewMsg.textContent = "";
+    yuvConvertPlanes(dw, dh, yu.format, small, yu.colorMatrix, yu.fullRange, function (rgba) {
+      if (!rgba) { previewMsg.textContent = "YUV conversion failed"; return; }
+      c.width = dw;
+      c.height = dh;
+      previewCanvasTouched = true;
+      var ctx = c.getContext("2d");
+      ctx.putImageData(new ImageData(rgba, dw, dh), 0, 0);
+      // 全分辨率转换延迟到放大查看时（openFrameModal 按需构建）
+      currentFullFrame = null;
+      var ts = (frameIndex / yu.fps).toFixed(3);
+      previewHint.textContent = "Frame " + frameIndex + " / POC " + frameIndex + " · " + ts + "s" + (yu.mtime ? " · captured " + yu.mtime : "");
+      previewMsg.textContent = "";
+    });
   }
 
-  // YUV 全分辨率帧构建（lightbox 打开时按需调用，供无损 PNG 导出）
-  function buildFullYuvFrame() {
-    if (!currentData || !currentData.isYuv || !fileBytes) return;
+  // YUV 全分辨率帧构建（lightbox 打开时按需调用，供无损 PNG 导出）；cb(ok) 异步返回
+  function buildFullYuvFrame(cb) {
+    var done = function (ok) { if (cb) cb(ok); };
+    if (!currentData || !currentData.isYuv || !fileBytes) { done(false); return; }
     var yu = currentData.yuv;
-    if (!yu || yu.frames <= 0 || !yu.width) return;
+    if (!yu || yu.frames <= 0 || !yu.width) { done(false); return; }
     var frameIndex = frameIndexOfSlice(selectedSlice);
     if (frameIndex < 0) frameIndex = 0;
     var planes = YuvParser.getFrame(fileBytes, frameIndex * yu.frameSize, yu.width, yu.height, yu.format);
-    if (!planes) return;
-    var rgba = yuvConvertPlanes(yu.width, yu.height, yu.format, planes, yu.colorMatrix, yu.fullRange);
-    var full = ensureFullFrame(yu.width, yu.height);
-    full.getContext("2d").putImageData(new ImageData(rgba, yu.width, yu.height), 0, 0);
+    if (!planes) { done(false); return; }
+    yuvConvertPlanes(yu.width, yu.height, yu.format, planes, yu.colorMatrix, yu.fullRange, function (rgba) {
+      if (!rgba) { done(false); return; }
+      var full = ensureFullFrame(yu.width, yu.height);
+      full.getContext("2d").putImageData(new ImageData(rgba, yu.width, yu.height), 0, 0);
+      done(true);
+    });
   }
 
 // YUV 设置面板：显示并填充当前值
@@ -666,7 +811,10 @@
 
   function openFrameModal() {
     captureModalFocus();
-    if (currentData && currentData.isYuv && !currentFullFrame) buildFullYuvFrame();
+    if (currentData && currentData.isYuv && !currentFullFrame) {
+      buildFullYuvFrame(function () { openFrameModal(); });
+      return;
+    }
     if (!currentFullFrame || !currentFullFrame.width) return;
     frameModalTitle.textContent = "Frame Preview — " + currentFullFrame.width + " x " + currentFullFrame.height +
       (currentData && currentData.isYuv && currentData.yuv ? " · " + currentData.yuv.formatName : "");
@@ -2475,6 +2623,20 @@ timeline.addEventListener("click", function (e) {
     return String(s).replace(/&/g, String.fromCharCode(38) + "amp;").replace(/</g, String.fromCharCode(38) + "lt;").replace(/>/g, String.fromCharCode(38) + "gt;").replace(/"/g, String.fromCharCode(38) + "quot;");
   }
 
+  var syntaxReqSeq = 0;  // 语法树异步请求序号：新选择使旧响应过期
+
+  // SEI 插件结果追加到语法树节点（worker 化后供同步/异步两条路径共用）
+  function augmentSeiPlugin(node, nal) {
+    if (!/SEI/i.test(nal.typeName || "") || !window.BrowserCodecAnalyzer || !window.BrowserCodecAnalyzer.runSeiPlugin)
+      return node;
+    var pnode = window.BrowserCodecAnalyzer.runSeiPlugin(fileBytes, nal, currentCodec);
+    if (pnode) {
+      if (!node.c) node.c = [];
+      node.c.push(pnode);
+    }
+    return node;
+  }
+
   function selectNal(index, scrollTo) {
     if (!currentData) return;
     selectedIndex = index;
@@ -2486,16 +2648,21 @@ timeline.addEventListener("click", function (e) {
       rows[i].classList.toggle("selected", parseInt(rows[i].dataset.index, 10) === index);
     }
 
-    var syntaxNode = nal.jpegSyntax || (currentData && currentData.isYuv ? buildYuvSyntaxNode(index) : fetchNalSyntax(index));
-    if (!nal.jpegSyntax && /SEI/i.test(nal.typeName || "") && window.BrowserCodecAnalyzer && window.BrowserCodecAnalyzer.runSeiPlugin) {
-      var pnode = window.BrowserCodecAnalyzer.runSeiPlugin(fileBytes, nal, currentCodec);
-      if (pnode) {
-        if (!syntaxNode.c) syntaxNode.c = [];
-        syntaxNode.c.push(pnode);
-      }
-    }
-    renderSyntax(syntaxNode);
+    // Hex 本地数据即时渲染；语法树 worker 模式下异步取回（seq 守卫防过期响应）
     renderHex(index);
+    var syncNode = nal.jpegSyntax || (currentData && currentData.isYuv ? buildYuvSyntaxNode(index) : null);
+    if (syncNode) {
+      renderSyntax(augmentSeiPlugin(syncNode, nal));
+    } else {
+      var seq = ++syntaxReqSeq;
+      fetchNalSyntax(index).then(function (node) {
+        if (seq !== syntaxReqSeq || selectedIndex !== index) return;
+        renderSyntax(augmentSeiPlugin(node, nal));
+      }).catch(function (err) {
+        if (seq !== syntaxReqSeq) return;
+        setStatus("Syntax fetch failed: " + (err && err.message ? err.message : err));
+      });
+    }
 
     if (scrollTo) {
       var targetTop = index * ROW_HEIGHT;
@@ -2618,8 +2785,11 @@ timeline.addEventListener("click", function (e) {
     play.frames = {};
 
     // 释放 WASM 侧上一次解析持有的解析树（WebParser 保存全部 NAL 的 shared_ptr，
-    // 不释放则三套编解码器的树会常驻 WASM 堆直到刷新页面）
-    if (Module && lastWasmParse) {
+    // 不释放则三套编解码器的树会常驻 WASM 堆直到刷新页面）：
+    // worker 模式发消息由 worker 整体 reset；页内同步模式直接调用
+    if (parserMode === "worker") {
+      if (parserWorker) { try { workerPost({ type: "reset" }); } catch (eR) {} }
+    } else if (Module && lastWasmParse) {
       try {
         if (lastWasmParse === "avc") Module._avc_reset();
         else if (lastWasmParse === "vvc") Module._vvc_reset();
@@ -2714,7 +2884,12 @@ timeline.addEventListener("click", function (e) {
     reader.onerror = function () {
       setStatus("Could not read file: " + (file && file.name ? file.name : "unknown") + " (FileReader error)");
     };
-    reader.onload = function (e) {
+    reader.onprogress = function (ev) {
+      if (ev.lengthComputable)
+        setStatus("Reading " + file.name + " (" + Math.round(ev.loaded * 100 / ev.total) + "%)...");
+    };
+    reader.onload = async function (e) {
+      setStatus("Parsing " + file.name + (parserMode === "worker" ? " (background)..." : " ..."));
       var rawBytes = new Uint8Array(e.target.result);
       try {
         var t0 = performance.now();
@@ -2917,7 +3092,7 @@ timeline.addEventListener("click", function (e) {
           currentNalLengthSize = 4;
           currentContainerInfo = null;
         }
-        if (!result) result = parseBuffer(fileBytes, hintCodec);
+        if (!result) result = await parseBuffer(fileBytes, hintCodec);
         var t1 = performance.now();
         currentCodec = result.codec;
         currentData = result.data;
@@ -3232,16 +3407,10 @@ getFrameModel();
     makeSplitterCol("splitBottomCol", bottomPanels);
     makeSplitterRow("splitMainRow", bottomPanels);
     setMobileView = initMobileNav();
-    if (typeof createHevcModule !== "function") {
-      setStatus("Error: WASM module (hevc.js) not found");
-      return;
-    }
-    createHevcModule().then(function (m) {
-      Module = m;
-      setStatus("Parser ready (H.264/H.265/H.266). Open or drop a bitstream file.");
-    }).catch(function (err) {
-      setStatus("Failed to load WASM module: " + err);
-      console.error(err);
+    // 解析器启动：优先 Worker（主线程零 WASM、不冻结）；file:// 等
+    // Worker 不可用场景由 initParserWorker 自动回退页内同步模式
+    initParserWorker(function (mode) {
+      if (window.console && console.info) console.info("Parser mode: " + mode);
     });
   }
 

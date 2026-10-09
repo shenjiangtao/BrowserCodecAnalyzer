@@ -934,6 +934,7 @@ function demuxNewFmt(d) {
 | 文件加载后无反应 | 状态栏显示 "Loading parser module..." | 1. 检查浏览器控制台是否有 WASM 加载错误<br>2. 确认 `dist/hevc.wasm` 可访问 (MIME: application/wasm)<br>3. 检查 `createHevcModule` 是否正常 resolve |
 | 解析报错 "parse failed" | CLI 返回码 3 | 1. 确认文件非空<br>2. 用 `xxd` 检查起始码 `00 00 01` 或 `00 00 00 01`<br>3. 尝试强制指定编解码器 `./hevcparser_native file.bin hevc` |
 | 语法树显示异常/为空 | 右侧面板空白 | 1. 点击 NAL 列表不同行测试<br>2. 检查控制台 `hevc_get_nal_syntax` 返回值<br>3. 确认 NAL 索引未越界 |
+| 状态栏显示 "Parser ready (in-page mode)" | 页面经 file:// 打开（浏览器禁止 file:// Worker） | 预期回退；经 http(s) 服务（python3 -m http.server -d dist 8000）即启用后台 Worker |
 | 视频预览黑屏 | Preview 标签页无画面 | 1. 确认浏览器支持 WebCodecs (Chrome 94+, Firefox 110+)<br>2. VVC 需加载 vvdec WASM，检查网络面板<br>3. AV1 需加载 dav1d WASM<br>4. 尝试点击时间轴不同帧 |
 | HDR 信息不显示 | 底部面板为空 | 1. 确认码流包含 SEI: mastering_display_colour_volume / content_light_level_info<br>2. HEVC: VUI 中的 colour_description_present_flag=1<br>3. 点击对应 NAL (通常是 SPS/VPS) 查看语法树确认 |
 | YUV 自动猜测失败 | 设置面板显示 "size not divisible — set resolution/format" | 非常规尺寸属预期行为：手动输入 Width/Height/Format 后点击 Apply |
@@ -955,6 +956,9 @@ function demuxNewFmt(d) {
 
 已实现的优化（代码中可验证）：
 
+- **后台解析 Worker**：WASM 解析/语法树/YUV 转换运行于 Web Worker（解析树常驻
+  worker 堆，主线程保持可交互）。不支持 Worker 的环境（file:// 打开 dist/）自动
+  回退页内模块——状态栏显示当前模式
 - **虚拟滚动**：NAL 列表仅渲染可见行
 - **YUV 降采样预览**：仅转换显示尺寸像素（8K 约 80 倍工作量削减）；全分辨率转换延迟到放大镜打开
 - **YUV LUT 转换 + WASM**：256 项查找表；优先 WASM `yuv_convert_planes`，JS 兜底

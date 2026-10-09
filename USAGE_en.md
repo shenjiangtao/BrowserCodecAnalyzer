@@ -939,6 +939,7 @@ function demuxNewFmt(d) {
 | No response after file load | Status bar shows "Loading parser module..." | 1. Check browser console for WASM load errors<br>2. Verify `dist/hevc.wasm` accessible (MIME: application/wasm)<br>3. Check `createHevcModule` resolves normally |
 | "parse failed" error | CLI returns code 3 | 1. Verify file not empty<br>2. Check start codes with `xxd` (`00 00 01` or `00 00 00 01`)<br>3. Try force codec: `./hevcparser_native file.bin hevc` |
 | Syntax tree empty/broken | Right panel blank | 1. Click different NAL list rows<br>2. Check console `hevc_get_nal_syntax` return value<br>3. Verify NAL index not out of bounds |
+| Status shows "Parser ready (in-page mode)" | Page opened via file:// (browsers block Workers there) | Expected fallback; serve over http(s) (`python3 -m http.server -d dist 8000`) to get the background worker |
 | Preview shows black screen | Preview tab no image | 1. Verify WebCodecs support (Chrome 94+, Firefox 110+)<br>2. VVC needs vvdec WASM - check Network tab<br>3. AV1 needs dav1d WASM<br>4. Click different frames on timeline |
 | HDR info not showing | Bottom panel empty | 1. Confirm bitstream has SEI: mastering_display_colour_volume / content_light_level_info<br>2. HEVC: VUI colour_description_present_flag=1<br>3. Click corresponding NAL (usually SPS/VPS) to verify in syntax tree |
 | YUV auto-guess fails | Settings panel shows "size not divisible — set resolution/format" | Expected for non-standard sizes: enter Width/Height/Format manually and click Apply |
@@ -960,6 +961,10 @@ function demuxNewFmt(d) {
 
 Implemented optimizations (verified in code):
 
+- **Background parser worker**: WASM parsing/syntax/YUV-convert run in a Web
+  Worker (parse trees live in the worker heap; main thread stays responsive).
+  Environments without Worker support (opening dist/ via file://) fall back
+  to an in-page module automatically — status bar shows the active mode
 - **Virtual scrolling**: NAL list renders only visible rows
 - **Downscale-first YUV preview**: converts only display-size pixels (~80x work reduction for 8K); full-res conversion deferred to lightbox
 - **YUV LUT conversion + WASM**: 256-entry lookup tables; WASM `yuv_convert_planes` preferred with JS fallback
