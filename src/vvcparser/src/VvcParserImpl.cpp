@@ -102,13 +102,19 @@ namespace VVC
         {
           processNALUnit(pdata + pos + startOffset, size - pos - startOffset, info);
         }
-        catch(std::runtime_error &)
+        catch(std::runtime_error &err)
         {
+          std::stringstream ss;
+          ss << "Parse aborted at offset " << (offset + pos) << ": " << err.what();
+          onWarning(ss.str(), &info, Parser::OUT_OF_RANGE);
           parseFailed = true;
           break;
         }
         catch(std::bad_alloc &)
         {
+          onWarning("Parse aborted at offset " + std::to_string(offset + pos) + ": out of memory", &info, Parser::OUT_OF_RANGE);
+          parseFailed = true;
+          break;
         }
 
         parsed = pos;

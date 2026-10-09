@@ -21,6 +21,7 @@ namespace web
 
       void reset();
       void setTotalSize(std::size_t size);
+      void setParsedBytes(std::size_t bytes);
 
       int calcSliceQp(std::shared_ptr<HEVC::Slice> pSlice);
 
@@ -63,6 +64,7 @@ namespace web
       std::vector<WarningEntry>     m_warnings;
 
       std::size_t                   m_totalSize;
+      std::size_t                   m_parsedBytes;
       std::size_t                   m_nalusNumber;
       std::size_t                   m_INumber;
       std::size_t                   m_PNumber;

@@ -300,7 +300,10 @@ sensor/GPS/IMU data sources.
 
 ### UI Controls Reference
 
-All interactions are mouse-driven — the app defines **no keyboard shortcuts**.
+Most interactions are mouse-driven; the app also supports a minimal keyboard set:
+`Esc` closes the open modal (frame lightbox / help) and returns focus to the
+trigger button, `←` / `→` step one frame back/forward (ignored while typing in
+inputs). Tabs expose ARIA `tablist`/`tab` roles with `aria-selected` state.
 
 | Control | Location | Function |
 |---------|----------|----------|
@@ -312,6 +315,9 @@ All interactions are mouse-driven — the app defines **no keyboard shortcuts**.
 | Click NAL row | NAL list | Show syntax tree + hex for that NAL |
 | Click frame bar | Timeline | Select and preview frame |
 | Drag splitters | Between panels | Resize columns / rows |
+| `Esc` | Global (when a modal is open) | Close modal, focus returns to trigger |
+| `←` / `→` | Global (file loaded, not typing in an input) | Previous / next frame |
+| Drag file onto the window | Anytime, even with a file loaded | Load / replace file (overlay confirms the drop zone) |
 
 ### Raw YUV Files (.yuv)
 

@@ -108,6 +108,7 @@ namespace web
 
   WebParser::WebParser():
     m_totalSize(0)
+    ,m_parsedBytes(std::numeric_limits<std::size_t>::max())
     ,m_nalusNumber(0)
     ,m_INumber(0)
     ,m_PNumber(0)
@@ -157,6 +158,10 @@ namespace web
   void WebParser::setTotalSize(std::size_t size)
   {
     m_totalSize = size;
+  }
+  void WebParser::setParsedBytes(std::size_t bytes)
+  {
+    m_parsedBytes = bytes;
   }
 
   int WebParser::calcSliceQp(std::shared_ptr<HEVC::Slice> pSlice)
@@ -656,6 +661,12 @@ namespace web
       out += "}";
     }
     out += "]";
+
+    if(m_parsedBytes != std::numeric_limits<std::size_t>::max() &&
+       m_parsedBytes + 4 < m_totalSize)
+    {
+      out += ",\"parseStoppedAt\":" + std::to_string(m_parsedBytes);
+    }
 
     out += "}";
     return out;

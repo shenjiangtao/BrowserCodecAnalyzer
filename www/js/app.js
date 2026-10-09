@@ -394,6 +394,20 @@
   }
 
   // 一次遍历完成：收集 slice、按帧分组、标注每个 NAL 的 frameIdx
+  // 帧模型缓存：computeFrames 为 O(NAL) 且带副作用（写 nalu.frameIdx），
+  // hover/缩放/选帧高频路径复用同一份模型；nalus 引用变化（新文件/YUV Apply）自动失效
+  var frameModelCache = null;
+  function getFrameModel() {
+    if (frameModelCache && currentData && frameModelCache._nalus === currentData.nalus &&
+        frameModelCache._nalusLen === currentData.nalus.length)
+      return frameModelCache;
+    var cf = computeFrames();
+    cf._nalus = currentData.nalus;
+    cf._nalusLen = currentData.nalus.length;
+    frameModelCache = cf;
+    return cf;
+  }
+
   function computeFrames() {
     var nalus = currentData.nalus;
     var slices = [];
@@ -581,7 +595,7 @@
       currentData = data;
       currentYuv = { width: w, height: h, format: fmt, fps: fps, matrix: matrix, mtime: mtime, guessed: false, alternatives: [] };
       currentWarnings = data.warnings || [];
-      computeFrames();
+      getFrameModel();
       renderStats(data.streamInfo);
       renderNalTable();
       renderHdr(data.hdr);
@@ -640,7 +654,18 @@
   var frameModalSave = document.getElementById("frameModalSave");
   var frameModalClose = document.getElementById("frameModalClose");
 
+  // 模态框焦点管理：打开时记录来源，关闭（按钮/Esc）后归还焦点
+  var modalReturnFocus = null;
+  function captureModalFocus() { modalReturnFocus = document.activeElement; }
+  function restoreModalFocus() {
+    if (modalReturnFocus && typeof modalReturnFocus.focus === "function") {
+      try { modalReturnFocus.focus(); } catch (eF) {}
+    }
+    modalReturnFocus = null;
+  }
+
   function openFrameModal() {
+    captureModalFocus();
     if (currentData && currentData.isYuv && !currentFullFrame) buildFullYuvFrame();
     if (!currentFullFrame || !currentFullFrame.width) return;
     frameModalTitle.textContent = "Frame Preview — " + currentFullFrame.width + " x " + currentFullFrame.height +
@@ -676,7 +701,7 @@
     frameModalFit.addEventListener("click", function () { setFrameModalMode("fit"); });
     frameModal100.addEventListener("click", function () { setFrameModalMode("100"); });
     frameModalSave.addEventListener("click", saveFramePng);
-    frameModalClose.addEventListener("click", function () { frameModal.classList.add("hidden"); });
+    frameModalClose.addEventListener("click", function () { frameModal.classList.add("hidden"); restoreModalFocus(); });
     frameModal.addEventListener("click", function (e) { if (e.target === frameModal) frameModal.classList.add("hidden"); });
   }
 
@@ -1002,7 +1027,7 @@
 
   // 帧时间轴（Slice 可视化，标记帧号 / POC）
   function renderTimeline() {
-    var cf = computeFrames();
+    var cf = getFrameModel();
     var slices = cf.slices;
     if (slices.length === 0) return;
     var frames = cf.frames;
@@ -1266,10 +1291,16 @@ timeline.addEventListener("click", function (e) {
   };
 
   function frameIndexOfSlice(sliceIdx) {
+    // 帧的 [first,last] 区间连续且递增 → 二分查找（原线性扫在长视频上
+    // 每次 hover 都要 O(F)，216k 帧 ≈ 每次鼠标移动 21 万次比较）
     var frames = timeline._frames;
-    if (!frames) return -1;
-    for (var i = 0; i < frames.length; i++) {
-      if (sliceIdx >= frames[i].first && sliceIdx <= frames[i].last) return i;
+    if (!frames || frames.length === 0) return -1;
+    var lo = 0, hi = frames.length - 1;
+    while (lo <= hi) {
+      var mid = (lo + hi) >> 1;
+      if (sliceIdx < frames[mid].first) hi = mid - 1;
+      else if (sliceIdx > frames[mid].last) lo = mid + 1;
+      else return mid;
     }
     return -1;
   }
@@ -2020,6 +2051,8 @@ timeline.addEventListener("click", function (e) {
     var tmp = document.createElement("canvas");
     tmp.width = img.width; tmp.height = img.height;
     tmp.getContext("2d").putImageData(img, 0, 0);
+    // 全分辨率快照（供放大查看/导出 PNG，与 WebCodecs 路径对齐）
+    ensureFullFrame(img.width, img.height).getContext("2d").drawImage(tmp, 0, 0);
     var maxW = previewView.clientWidth - 32, maxH = 480;
     if (maxW < 160) maxW = 160;
     var scale = Math.min(1, maxW / img.width, maxH / img.height);
@@ -2086,6 +2119,8 @@ timeline.addEventListener("click", function (e) {
     var tmp = document.createElement("canvas");
     tmp.width = img.width; tmp.height = img.height;
     tmp.getContext("2d").putImageData(img, 0, 0);
+    // 全分辨率快照（供放大查看/导出 PNG，与 WebCodecs 路径对齐）
+    ensureFullFrame(img.width, img.height).getContext("2d").drawImage(tmp, 0, 0);
     var maxW = previewView.clientWidth - 32, maxH = 480;
     if (maxW < 160) maxW = 160;
     var scale = Math.min(1, maxW / img.width, maxH / img.height);
@@ -2502,6 +2537,12 @@ timeline.addEventListener("click", function (e) {
   var seiView = document.getElementById("seiView");
 
   function showTab(which) {
+    tabSyntax.setAttribute("aria-selected", which === "syntax" ? "true" : "false");
+    tabPreview.setAttribute("aria-selected", which === "preview" ? "true" : "false");
+    tabHex.setAttribute("aria-selected", which === "hex" ? "true" : "false");
+    tabSei.setAttribute("aria-selected", which === "sei" ? "true" : "false");
+    tabBitrate.setAttribute("aria-selected", which === "bitrate" ? "true" : "false");
+    tabMediaInfo.setAttribute("aria-selected", which === "mediainfo" ? "true" : "false");
     tabSyntax.classList.toggle("active", which === "syntax");
     tabPreview.classList.toggle("active", which === "preview");
     tabHex.classList.toggle("active", which === "hex");
@@ -2622,6 +2663,7 @@ timeline.addEventListener("click", function (e) {
     hlFrame = { slice: -1, x: 0, w: 0 };
     playProgress = { start: -1, end: -1 };
 
+    frameModelCache = null;
     timeline._frames = null;
     timeline._frameTsByFrame = null;
     timeline._slices = null;
@@ -2893,7 +2935,7 @@ timeline.addEventListener("click", function (e) {
             currentData.tiles = heic.tiles || null;
           }
         }
-computeFrames();
+getFrameModel();
 
         // YUV：显示设置面板（填充当前猜测值）
         var yuvSettingsPanel = document.getElementById("yuvSettingsPanel");
@@ -2932,7 +2974,10 @@ computeFrames();
         if (isImage) { showTab("preview"); if (setMobileView) setMobileView("syntax"); previewFrame(0); }
         else if (currentData.nalus.length > 0) { showTab("preview"); if (setMobileView) setMobileView("syntax"); presetPreviewCanvas(); previewFrame(0); }
 
-        setStatus("Parsed: " + currentCodec.toUpperCase() + ", " + currentData.nalus.length + " NAL units" + srcNote + ", " + (t1 - t0).toFixed(0) + " ms");
+        var stopNote = "";
+        if (currentData.parseStoppedAt !== undefined && currentData.parseStoppedAt < (fileBytes ? fileBytes.length : Infinity))
+          stopNote = " — WARNING: parse stopped early at offset " + hex8(currentData.parseStoppedAt) + " (see Warnings)";
+        setStatus("Parsed: " + currentCodec.toUpperCase() + ", " + currentData.nalus.length + " NAL units" + srcNote + ", " + (t1 - t0).toFixed(0) + " ms" + stopNote);
       } catch (err) {
         clearAll();
         setStatus("Parse error: " + err.message);
@@ -2944,6 +2989,24 @@ computeFrames();
 
   openBtn.addEventListener("click", function () { fileInput.click(); });
   fileInput.addEventListener("change", function () { handleFile(fileInput.files[0]); });
+
+  // 键盘可达性：Esc 关闭模态框（焦点归还）；←/→ 逐帧步进
+  document.addEventListener("keydown", function (e) {
+    var t = e.target;
+    var tag = (t && t.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "select" || tag === "textarea" || (t && t.isContentEditable)) return;
+    if (e.key === "Escape") {
+      if (!helpModal.classList.contains("hidden")) { helpModal.classList.add("hidden"); restoreModalFocus(); return; }
+      if (!frameModal.classList.contains("hidden")) { frameModal.classList.add("hidden"); restoreModalFocus(); return; }
+      return;
+    }
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      if (!helpModal.classList.contains("hidden") || !frameModal.classList.contains("hidden")) return;
+      if (!currentData || !timeline._frames || timeline._frames.length === 0) return;
+      e.preventDefault();
+      stepFrame(e.key === "ArrowRight" ? 1 : -1);
+    }
+  });
 
   // ---------- 插件加载 ----------
   var pluginBtn = document.getElementById("pluginBtn");
@@ -3003,6 +3066,34 @@ computeFrames();
   dropzone.addEventListener("click", function () { fileInput.click(); });
   dropzone.addEventListener("dragover", function (e) { e.preventDefault(); dropzone.classList.add("dragover"); });
   dropzone.addEventListener("dragleave", function () { dropzone.classList.remove("dragover"); });
+  // 全局拖拽：文件已加载时随时拖入替换（dropzone 仅空态可见）。
+  // 覆盖层 pointer-events:none —— 拖放事件始终落在 document 上。
+  var dragDepth = 0;
+  function dragHasFiles(e) {
+    return e.dataTransfer && Array.prototype.some.call(e.dataTransfer.types || [], function (t) { return t === "Files"; });
+  }
+  window.addEventListener("dragenter", function (e) {
+    if (!dragHasFiles(e)) return;
+    dragDepth++;
+    if (!dropzone.classList.contains("hidden")) return;
+    dropOverlay.classList.remove("hidden");
+  });
+  window.addEventListener("dragleave", function (e) {
+    if (!dragHasFiles(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) dropOverlay.classList.add("hidden");
+  });
+  window.addEventListener("dragover", function (e) { if (dragHasFiles(e)) e.preventDefault(); });
+  window.addEventListener("drop", function (e) {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    dropOverlay.classList.add("hidden");
+    if (!dropzone.classList.contains("hidden")) return; // 空态由 dropzone 自身处理
+    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) handleFile(f);
+  });
+
   dropzone.addEventListener("drop", function (e) {
     e.preventDefault();
     dropzone.classList.remove("dragover");
@@ -3012,8 +3103,8 @@ computeFrames();
   var helpBtn = document.getElementById("helpBtn");
   var helpModal = document.getElementById("helpModal");
   var helpClose = document.getElementById("helpClose");
-  helpBtn.addEventListener("click", function () { helpModal.classList.remove("hidden"); });
-  helpClose.addEventListener("click", function () { helpModal.classList.add("hidden"); });
+  helpBtn.addEventListener("click", function () { captureModalFocus(); helpModal.classList.remove("hidden"); });
+  helpClose.addEventListener("click", function () { helpModal.classList.add("hidden"); restoreModalFocus(); });
   helpModal.addEventListener("click", function (e) { if (e.target === helpModal) helpModal.classList.add("hidden"); });
 
   window.addEventListener("resize", function () {

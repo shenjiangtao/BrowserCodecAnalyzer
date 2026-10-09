@@ -194,10 +194,14 @@ BrowserCodecAnalyzer/
 | **Preview 面板按钮** | ▶ Play 播放 / \|◀ Prev / ▶\| Next / Decode Order↔Display Order 切换 |
 | **点击预览画布** | 打开全分辨率放大镜（Fit/100%，Save PNG）/ Open full-res lightbox |
 | **拖拽分割条** | 调整面板大小 / Resize panels |
-| **拖拽文件到页面** | 加载并解析 / Load & parse file |
+| **Esc** | 关闭打开的模态框（放大镜/帮助），焦点归还触发按钮 / Close open modal, focus returns to trigger |
+| **← / →** | 上一帧 / 下一帧（输入框聚焦时不劫持）/ Prev / next frame (ignored while typing in inputs) |
+| **拖拽文件到页面** | 随时加载/替换文件（含已加载状态，显示覆盖层）/ Load or replace file anytime, with overlay |
 
-> 本工具无键盘快捷键，全部通过上述按钮/点击操作。
-> There are no keyboard shortcuts; all interactions are via the buttons and clicks above.
+> 附加提示：损坏/截断的码流解析中止时，状态栏会提示 "parse stopped early at offset X"，
+> 并在 Warnings 面板生成对应告警记录。
+> On corrupt/truncated streams the status bar reports "parse stopped early at offset X"
+> with a matching entry in the Warnings panel.
 
 ---
 

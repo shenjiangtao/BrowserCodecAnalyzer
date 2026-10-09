@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -85,13 +85,13 @@
     <section class="panel syntax-panel">
       <div class="panel-title">
         Syntax Elements <span id="syntaxTitle" class="count"></span>
-        <div class="tab-group">
-          <button id="tabSyntax" class="tab active">Syntax</button>
-          <button id="tabPreview" class="tab">Preview</button>
-          <button id="tabHex" class="tab">Hex</button>
-          <button id="tabSei" class="tab">SEI</button>
-          <button id="tabMediaInfo" class="tab">MediaInfo</button>
-          <button id="tabBitrate" class="tab">Bitrate</button>
+        <div class="tab-group" role="tablist" aria-label="Analysis views">
+          <button id="tabSyntax" class="tab active" role="tab" aria-selected="true">Syntax</button>
+          <button id="tabPreview" class="tab" role="tab" aria-selected="false">Preview</button>
+          <button id="tabHex" class="tab" role="tab" aria-selected="false">Hex</button>
+          <button id="tabSei" class="tab" role="tab" aria-selected="false">SEI</button>
+          <button id="tabMediaInfo" class="tab" role="tab" aria-selected="false">MediaInfo</button>
+          <button id="tabBitrate" class="tab" role="tab" aria-selected="false">Bitrate</button>
         </div>
       </div>
       <div id="syntaxTree" class="syntax-tree"></div>
@@ -155,6 +155,8 @@
   <footer class="statusbar">
     <span id="status">Loading parser module...</span>
   </footer>
+
+  <div id="dropOverlay" class="drop-overlay hidden"><span>Drop file to load</span></div>
 
   <div id="frameModal" class="modal-overlay hidden">
     <div class="modal frame-modal-box">

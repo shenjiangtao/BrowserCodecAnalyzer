@@ -41,6 +41,7 @@ namespace web
 
   AvcWebParser::AvcWebParser():
     m_totalSize(0)
+    ,m_parsedBytes(std::numeric_limits<std::size_t>::max())
     ,m_nalusNumber(0)
     ,m_INumber(0)
     ,m_PNumber(0)
@@ -85,6 +86,11 @@ namespace web
   void AvcWebParser::setTotalSize(std::size_t size)
   {
     m_totalSize = size;
+  }
+
+  void AvcWebParser::setParsedBytes(std::size_t bytes)
+  {
+    m_parsedBytes = bytes;
   }
 
   void AvcWebParser::fillPocAndRefs(NALUEntry &e, const AVC::Slice_NAL *p)
@@ -476,6 +482,12 @@ namespace web
       out += ",\"type\":" + std::to_string(m_warnings[i].type) + "}";
     }
     out += "]";
+
+    if(m_parsedBytes != std::numeric_limits<std::size_t>::max() &&
+       m_parsedBytes + 4 < m_totalSize)
+    {
+      out += ",\"parseStoppedAt\":" + std::to_string(m_parsedBytes);
+    }
 
     out += "}";
     return out;

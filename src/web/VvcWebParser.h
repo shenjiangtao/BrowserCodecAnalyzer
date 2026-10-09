@@ -20,6 +20,7 @@ namespace web
 
       void reset();
       void setTotalSize(std::size_t size);
+      void setParsedBytes(std::size_t bytes);
 
       void onNALUnit(std::shared_ptr<VVC::NALUnit> pNALUnit, const VVC::Parser::Info *pInfo) override;
       void onWarning(const std::string &warning, const VVC::Parser::Info *pInfo, VVC::Parser::WarningType type) override;
@@ -56,6 +57,7 @@ namespace web
       std::vector<WarningEntry> m_warnings;
 
       std::size_t m_totalSize;
+      std::size_t m_parsedBytes;
       std::size_t m_nalusNumber;
       std::size_t m_INumber;
       std::size_t m_PNumber;

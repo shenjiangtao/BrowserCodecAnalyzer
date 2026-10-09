@@ -75,7 +75,7 @@ extern "C"
 
     try
     {
-      g_parser -> process(data, size);
+      g_webParser -> setParsedBytes(g_parser -> process(data, size));
     }
     catch(const std::exception &err)
     {
@@ -121,7 +121,7 @@ extern "C"
     g_avcParser -> addConsumer(g_avcWebParser);
     try
     {
-      g_avcParser -> process(data, size);
+      g_avcWebParser -> setParsedBytes(g_avcParser -> process(data, size));
     }
     catch(const std::exception &err)
     {
@@ -165,7 +165,7 @@ extern "C"
     g_vvcParser -> addConsumer(g_vvcWebParser);
     try
     {
-      g_vvcParser -> process(data, size);
+      g_vvcWebParser -> setParsedBytes(g_vvcParser -> process(data, size));
     }
     catch(const std::exception &err)
     {
