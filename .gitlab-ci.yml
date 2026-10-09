@@ -5,6 +5,19 @@
 
 image: ubuntu:22.04
 
+stages:
+  - test
+  - deploy
+
+# 质量门禁：ASAN 单元测试 + golden 基线（解析输出与入库基准做 JSON 语义对比）
+run-tests:
+  stage: test
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq g++ make python3 ca-certificates
+  script:
+    - bash tests/run.sh
+
 pages:
   stage: deploy
   before_script:

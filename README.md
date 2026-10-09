@@ -142,6 +142,13 @@ BrowserCodecAnalyzer/
 │   └── superpowers/specs/2026-09-17-yuv-parser-design.md  # YUV 设计文档
 ├── build.sh              # Web 构建脚本（标准入口）/ Web build script (canonical)
 ├── Makefile              # 统一构建 native + wasm / Unified build
+├── tests/                # 质量门禁 / Test gate (CI 必跑 / required in CI)
+│   ├── core_sanity_test.cpp   # ASAN 单元测试（BitstreamReader 越界、POC 推导等）
+│   ├── webparser_poc_test.cpp # POC 推导单元测试（IDR 复位 / dependent slice）
+│   ├── verify.py              # golden JSON 语义对比
+│   ├── run.sh                 # 入口：单测 + 原生构建 + golden 对比
+│   ├── fixtures/              # 入库测试码流 (AVC/HEVC/多切片/损头流)
+│   └── golden/                # 入库基准输出
 ├── .github/workflows/deploy.yml  # GitHub Pages CI
 ├── .gitlab-ci.yml        # GitLab Pages CI
 ├── USAGE_en.md           # 英文技术文档 / English technical documentation
@@ -242,6 +249,14 @@ BrowserCodecAnalyzer/
 5. 更新 `build.sh` 添加新源文件与导出函数（`Makefile` 的 `native`/`wasm` 目标同步更新）
 6. 在 `CodecDetector.cpp` 添加检测逻辑
 7. 前端 `app.js` 添加对应处理逻辑
+
+### 测试 / Testing
+
+```bash
+bash tests/run.sh
+```
+
+CI 部署前必跑：ASAN 内存安全单测（BitstreamReader 越界、calcNumPocTotalCurr、POC 推导）+ golden 基线对比（fixtures 码流的解析输出与入库基准做 JSON 语义 diff）。修改解析器后需同步更新 golden：`./hevcparser_native tests/fixtures/<name> > tests/golden/<name>.json`。
 
 ### SEI 插件开发 / SEI Plugin Development
 

@@ -353,7 +353,10 @@ void HevcParserImpl::processSliceHeader(std::shared_ptr<Slice> pslice, Bitstream
           {
             if(m_spsMap[spsId] -> num_long_term_ref_pics_sps > 1)
             {
+              // Ceil(Log2(num))：非 2 的幂时 floor 会少读一位，导致后续全部错位
               int32_t ltIdxSpsLength = HEVC::log2(m_spsMap[spsId] -> num_long_term_ref_pics_sps);
+              if(1 << ltIdxSpsLength < (int32_t)m_spsMap[spsId] -> num_long_term_ref_pics_sps)
+                ltIdxSpsLength++;
               pslice -> lt_idx_sps[i] = bs.getBits(ltIdxSpsLength);
             }
           }

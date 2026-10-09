@@ -183,8 +183,32 @@ namespace web
     if(!sps)
       sps = m_lastSPS;
 
+    // IDR：POC 固定为 0，并复位推导状态（spec 8.3.1），
+    // 避免携带上一个 GOP 的 msb 污染后续推导
+    if(pSlice -> m_nalHeader.type == HEVC::NAL_IDR_W_RADL ||
+       pSlice -> m_nalHeader.type == HEVC::NAL_IDR_N_LP)
+    {
+      e.slicePoc = 0;
+      m_pocMsb = 0;
+      m_prevPicOrderCntLsb = 0;
+      m_pocInitialized = true;
+      return;
+    }
+
+    // dependent slice 不携带 slice_pic_order_cnt_lsb：
+    // 不得推进/污染推导状态，显示所属图像的 POC
+    if(pSlice -> dependent_slice_segment_flag)
+    {
+      e.slicePoc = m_pocMsb + m_prevPicOrderCntLsb;
+      return;
+    }
+
     int pocLsb = (int)pSlice -> slice_pic_order_cnt_lsb;
-    int maxLsb = sps ? (1 << (int)(sps -> log2_max_pic_order_cnt_lsb_minus4 + 4)) : 1;
+    // 移位宽度按规范范围钳制（log2_max_pic_order_cnt_lsb ∈ [4,16]），防损坏 SPS 的 UB 移位
+    int log2Max = sps ? (int)(sps -> log2_max_pic_order_cnt_lsb_minus4) + 4 : 4;
+    if(log2Max < 4) log2Max = 4;
+    if(log2Max > 16) log2Max = 16;
+    int maxLsb = 1 << log2Max;
 
     int msb = m_pocMsb;
     if(m_pocInitialized)
@@ -263,6 +287,12 @@ namespace web
       case NAL_IDR_N_LP:
       {
         std::shared_ptr<Slice> pSlice = std::dynamic_pointer_cast<Slice>(pNALUnit);
+        if(pSlice -> m_processFailed)
+        {
+          e.info = "IDR Slice (parse failed)";
+          e.color = "#888888";
+          break;
+        }
         e.info = "IDR Slice #" + std::to_string(m_frameNum);
         e.color = "red";
         e.sliceType = 2; // I
@@ -293,6 +323,12 @@ namespace web
       case NAL_CRA_NUT:
       {
         std::shared_ptr<Slice> pSlice = std::dynamic_pointer_cast<Slice>(pNALUnit);
+        if(pSlice -> m_processFailed)
+        {
+          e.info = "Slice (parse failed)";
+          e.color = "#888888";
+          break;
+        }
         fillPocAndRefs(e, pSlice);
         e.sliceQp = calcSliceQp(pSlice);
         e.sliceAddr = pSlice -> slice_segment_address;

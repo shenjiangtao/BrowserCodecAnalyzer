@@ -12,6 +12,13 @@ namespace web
 
   namespace
   {
+    std::string formatDouble(double d)
+    {
+      std::stringstream ss;
+      ss << d;
+      return ss.str();
+    }
+
     std::string vvcProfileName(uint32_t profileIdc)
     {
       switch(profileIdc)
@@ -93,8 +100,23 @@ namespace web
     if(!sps)
       sps = m_lastSPS;
 
+    // IDR：POC 固定为 0 并复位推导状态（spec 8.3.1）
+    if(p->m_nalHeader.nal_unit_type == VVC::NAL_IDR_W_RADL ||
+       p->m_nalHeader.nal_unit_type == VVC::NAL_IDR_N_LP)
+    {
+      e.slicePoc = 0;
+      m_pocMsb = 0;
+      m_prevPicOrderCntLsb = 0;
+      m_pocInitialized = true;
+      return;
+    }
+
     int pocLsb = (int)sl.slice_pic_order_cnt_lsb;
-    int maxLsb = sps ? (1 << (int)(sps->sps.sps_log2_max_pic_order_cnt_lsb_minus4 + 4)) : 1;
+    // 移位宽度按规范范围钳制，防损坏 SPS 的 UB 移位
+    int log2Max = sps ? (int)(sps->sps.sps_log2_max_pic_order_cnt_lsb_minus4) + 4 : 4;
+    if(log2Max < 4) log2Max = 4;
+    if(log2Max > 16) log2Max = 16;
+    int maxLsb = 1 << log2Max;
 
     int msb = m_pocMsb;
     if(m_pocInitialized)
@@ -174,12 +196,23 @@ namespace web
       case VVC::NAL_GDR_NUT:
       {
         std::shared_ptr<VVC::Slice_NAL> p = std::dynamic_pointer_cast<VVC::Slice_NAL>(pNALUnit);
+        if(p->m_processFailed)
+        {
+          e.info = "IRAP Slice (parse failed)";
+          e.color = "#888888";
+          break;
+        }
         e.info = (pNALUnit->m_nalHeader.nal_unit_type == VVC::NAL_IDR_W_RADL || pNALUnit->m_nalHeader.nal_unit_type == VVC::NAL_IDR_N_LP)
                  ? "IDR Slice #" + std::to_string(m_frameNum)
                  : "IRAP Slice #" + std::to_string(m_frameNum);
         e.color = "red";
         e.sliceType = 2;
         e.sliceQp = 26 + p->slice.slice_qp_delta;
+        {
+          auto itPps = m_ppsMap.find(p->slice.slice_pic_parameter_set_id);
+          if(itPps != m_ppsMap.end())
+            e.sliceQp += itPps->second->pps.pps_init_qp_minus26;
+        }
         fillPocAndRefs(e, p.get());
         e.frameNum = m_frameNum;
         m_INumber++;
@@ -193,7 +226,18 @@ namespace web
       case VVC::NAL_RASL_NUT:
       {
         std::shared_ptr<VVC::Slice_NAL> p = std::dynamic_pointer_cast<VVC::Slice_NAL>(pNALUnit);
+        if(p->m_processFailed)
+        {
+          e.info = "Slice (parse failed)";
+          e.color = "#888888";
+          break;
+        }
         e.sliceQp = 26 + p->slice.slice_qp_delta;
+        {
+          auto itPps = m_ppsMap.find(p->slice.slice_pic_parameter_set_id);
+          if(itPps != m_ppsMap.end())
+            e.sliceQp += itPps->second->pps.pps_init_qp_minus26;
+        }
         fillPocAndRefs(e, p.get());
         e.frameNum = m_frameNum;
         switch(p->slice.slice_type)
@@ -343,7 +387,7 @@ namespace web
     else
       out += ",\"profile\":\"NOT PRESENT\"";
     if(m_levelPresent)
-      out += ",\"level\":\"" + std::to_string(m_level) + "\"";
+      out += ",\"level\":\"" + formatDouble((double)m_level / 30.0) + "\"";
     else
       out += ",\"level\":\"NOT PRESENT\"";
     out += ",\"tier\":\"\"";
